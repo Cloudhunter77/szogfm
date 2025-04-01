@@ -26,9 +26,9 @@ namespace szogfm {
 
             // Interface implementations
             bool initialize() override;
-            bool setFrequency(uint16_t frequency) override;
+            bool setFrequency(uint16_t frequency, bool initializing = false) override;
             uint16_t getFrequency() const override;
-            bool setVolume(uint8_t volume) override;
+            bool setVolume(uint8_t volume, bool initializing = false) override;
             uint8_t getVolume() const override;
             bool setMute(bool mute) override;
             bool isMuted() const override;
@@ -42,7 +42,7 @@ namespace szogfm {
 
         private:
             // RDA5807M registers and constants
-            static constexpr uint8_t RDA5807M_ADDR = 0x10;  // I2C address
+            static constexpr uint8_t RDA5807M_ADDR = 0x11;  // I2C address
             static constexpr uint8_t REG_CHIP_ID = 0x00;    // Chip ID register
             static constexpr uint16_t CHIP_ID = 0x5801;     // Expected chip ID
 

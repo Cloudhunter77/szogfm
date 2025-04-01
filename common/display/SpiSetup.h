@@ -38,8 +38,8 @@ namespace szogfm {
              * @return true if successful, false otherwise
              */
             static bool configureVspi() {
-                // Configure SPI for ST7789 display
-                return configureSpi(18, 19, 23, 35);
+                // Configure SPI for ST7789 display with CS=12 instead of 35
+                return configureSpi(18, 19, 23, 12);
             }
 
             /**

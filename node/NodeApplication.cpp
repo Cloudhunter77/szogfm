@@ -20,7 +20,14 @@ namespace szogfm {
                   _connectionSignalStrength(0), _messageSequence(0),
                   _hasSensors(false), _temperature(0.0f), _humidity(0.0f),
 
-                  _pinAUX(33) {           // AUX pin for EBYTE module
+                // Add distinct pin values for I2C:
+                  _pinUserButton(34),        // Analog input for buttons
+                  _pinRelayControl(27),      // Control pin for relay
+                  _pinSDASensor(21),         // SDA pin for I2C (FM radio)
+                  _pinSCLSensor(22),         // SCL pin for I2C (FM radio)
+                  _pinM0(4),                 // M0 pin for EBYTE module
+                  _pinM1(32),                // M1 pin for EBYTE module
+                  _pinAUX(33) {              // AUX pin for EBYTE module
 
             _commModule = nullptr;
             _radio = nullptr;
@@ -47,10 +54,36 @@ namespace szogfm {
             Serial.println("Button handler initialized");
 
             // Initialize radio module
+            Serial.println("Scanning I2C bus for devices...");
+            Wire.begin(_pinSDASensor, _pinSCLSensor);
+            byte error, address;
+            int deviceCount = 0;
+
+            for (address = 1; address < 127; address++) {
+                Wire.beginTransmission(address);
+                error = Wire.endTransmission();
+
+                if (error == 0) {
+                    Serial.print("I2C device found at address 0x");
+                    if (address < 16) Serial.print("0");
+                    Serial.print(address, HEX);
+                    Serial.println("!");
+                    deviceCount++;
+                }
+            }
+
+            if (deviceCount == 0) {
+                Serial.println("No I2C devices found - check wiring!");
+            } else {
+                Serial.print("Found ");
+                Serial.print(deviceCount);
+                Serial.println(" device(s)");
+            }
+
             Serial.println("Initializing radio module...");
             _radio = new radio::RDA5807Radio(_pinSDASensor, _pinSCLSensor);
             if (!_radio->initialize()) {
-                handleError("Failed to initialize radio module");
+                handleError("Failed to initialize radio module: " + _radio->getLastError());
                 return false;
             }
             Serial.println("Radio module initialized successfully");
@@ -64,7 +97,7 @@ namespace szogfm {
             // Initialize ST7789 TFT display
             Serial.println("Initializing ST7789 TFT display...");
             // CLK: GPIO18, MISO: GPIO19, MOSI: GPIO23, CS: GPIO35, RST: GPIO26, DC: GPIO25
-            _display = new display::ST7789Display(240, 240, 18, 19, 23, 35, 25, 26);
+            _display = new display::ST7789Display(240, 240, 18, 19, 23, 12, 25, 26);
             if (!_display->initialize()) {
                 handleError("Failed to initialize display");
                 return false;
@@ -73,6 +106,33 @@ namespace szogfm {
 
             // Set display rotation if needed
             _display->setRotation(2);  // Adjust based on your mounting orientation
+
+
+            // Add this after display initialization in NodeApplication::initialize()
+            if (_display) {
+                Serial.println("Drawing test pattern on display");
+
+                // Display test message
+                _display->clear();
+                _display->displayMessage("TEST RED", 20, 20, 2);
+                _display->displayMessage("Display Check", 20, 60, 2);
+                _display->update();
+                delay(2000);
+
+                // Try another message
+                _display->clear();
+                _display->displayMessage("TEST GREEN", 20, 20, 2);
+                _display->displayMessage("If you see this", 20, 60, 2);
+                _display->displayMessage("display is working", 20, 100, 2);
+                _display->update();
+                delay(2000);
+
+                // Return to normal display state
+                _display->clear();
+                _display->update();
+
+                Serial.println("Test pattern complete");
+            }
 
             // Initialize communication module
             Serial.println("Initializing communication module...");

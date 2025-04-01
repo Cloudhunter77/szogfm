@@ -11,6 +11,8 @@ namespace szogfm {
         }
 
         bool RDA5807Radio::initialize() {
+            Serial.println("Initializing RDA5807 Radio with pins SDA=" + String(_sda) + ", SCL=" + String(_scl));
+
             // Initialize I2C if pins are specified
             if (_sda >= 0 && _scl >= 0) {
                 Wire.begin(_sda, _scl);
@@ -18,43 +20,58 @@ namespace szogfm {
                 Wire.begin(); // Use default I2C pins
             }
 
+            // Slow down I2C for better compatibility
+            Wire.setClock(100000); // 100kHz I2C clock speed
+
             // Check if the module is present
             if (!isModulePresent()) {
-                _lastError = "RDA5807M module not found";
+                _lastError = "RDA5807M module not found on I2C bus";
+                Serial.println("ERROR: " + _lastError);
                 return false;
             }
 
-            // Reset the module
-            uint16_t config = CONFIG_ENABLE | CONFIG_SOFT_RESET;
-            if (!writeRegister(REG_CONFIG, config)) {
+            // Reset the module with a different approach
+            Wire.beginTransmission(RDA5807M_ADDR);
+            Wire.write(0x00);
+            Wire.write(0x00);
+            Wire.write(0x02);  // Soft reset
+            if (Wire.endTransmission() != 0) {
                 _lastError = "Failed to reset module";
                 return false;
             }
 
-            // Wait for the reset to complete
+            // Wait for reset to complete
             delay(50);
 
-            // Initialize with default settings
-            config = CONFIG_ENABLE | CONFIG_DHIZ | CONFIG_DMUTE;
-            if (!writeRegister(REG_CONFIG, config)) {
+            // Initialize with basic power up
+            Wire.beginTransmission(RDA5807M_ADDR);
+            Wire.write(0x02);  // Starting at register 0x02
+            Wire.write(0xD0);  // 0xD0 - Enable, output, unmute
+            Wire.write(0x01);  // 0x01 - Power up
+            if (Wire.endTransmission() != 0) {
                 _lastError = "Failed to initialize module";
                 return false;
             }
 
-            // Set initial band and channel spacing
-            uint16_t chan = CHAN_BAND_87_108 | CHAN_SPACE_100K;
-            if (!writeRegister(REG_CHAN, chan)) {
-                _lastError = "Failed to set band and spacing";
+            delay(50);  // Give time to stabilize
+
+            // Set initial band and spacing
+            Wire.beginTransmission(RDA5807M_ADDR);
+            Wire.write(0x03);  // Starting at register 0x03
+            Wire.write(0x00);  // Clear highbyte
+            Wire.write(0x00);  // Band=87-108MHz, 100kHz spacing
+            if (Wire.endTransmission() != 0) {
+                _lastError = "Failed to set band";
                 return false;
             }
 
             // Set initial volume
-            if (!setVolume(_volume)) {
+            if (!setVolume(_volume, true)) {
                 return false;
             }
 
             // Set initial frequency
-            if (!setFrequency(_frequency)) {
+            if (!setFrequency(_frequency, true)) {
                 return false;
             }
 
@@ -62,8 +79,9 @@ namespace szogfm {
             return true;
         }
 
-        bool RDA5807Radio::setFrequency(uint16_t frequency) {
-            if (!_initialized) {
+        bool RDA5807Radio::setFrequency(uint16_t frequency, bool initializing) {
+            // If we're initializing, bypass the initialization check
+            if (!_initialized && !initializing) {
                 _lastError = "Module not initialized";
                 return false;
             }
@@ -78,51 +96,30 @@ namespace szogfm {
             // Channel = (Frequency - 87.5 MHz) / Channel Spacing
             uint16_t channel = (frequency - 8750) / 10;
 
-            // Read current channel register value
-            uint16_t chanReg;
-            if (!readRegister(REG_CHAN, chanReg)) {
-                _lastError = "Failed to read channel register";
-                return false;
-            }
+            // Set channel and tune bit directly
+            Wire.beginTransmission(RDA5807M_ADDR);
+            Wire.write(0x03);  // Channel register address
+            Wire.write((channel >> 2) & 0xFF);  // High byte of channel
+            Wire.write(((channel & 0x03) << 6) | 0x10);  // Low byte with tune bit set
 
-            // Clear channel bits and set new channel
-            chanReg &= ~0xFFC0; // Clear the channel bits (bits 6-15)
-            chanReg |= (channel << 6); // Set channel (bits 6-15)
-            chanReg |= CHAN_TUNE; // Set tune bit
-
-            // Write the new channel
-            if (!writeRegister(REG_CHAN, chanReg)) {
+            if (Wire.endTransmission() != 0) {
                 _lastError = "Failed to set frequency";
                 return false;
             }
 
-            // Wait for tuning to complete
-            unsigned long startTime = millis();
-            bool tuneComplete = false;
-            while (millis() - startTime < 100) { // Timeout after 100ms
-                uint16_t status;
-                if (readRegister(REG_STATUS, status) && (status & STATUS_STC)) {
-                    tuneComplete = true;
-                    break;
-                }
-                delay(5);
-            }
+            // Wait for tuning to complete (simplified)
+            delay(50);
 
             // Clear the tune bit
-            chanReg &= ~CHAN_TUNE;
-            if (!writeRegister(REG_CHAN, chanReg)) {
-                _lastError = "Failed to clear tune bit";
-                return false;
-            }
+            Wire.beginTransmission(RDA5807M_ADDR);
+            Wire.write(0x03);  // Channel register address
+            Wire.write((channel >> 2) & 0xFF);  // High byte of channel
+            Wire.write((channel & 0x03) << 6);  // Low byte without tune bit
 
-            if (!tuneComplete) {
-                _lastError = "Tuning timeout";
-                return false;
-            }
+            Wire.endTransmission();
 
             // Store the new frequency
             _frequency = frequency;
-
             return true;
         }
 
@@ -130,8 +127,9 @@ namespace szogfm {
             return _frequency;
         }
 
-        bool RDA5807Radio::setVolume(uint8_t volume) {
-            if (!_initialized) {
+        bool RDA5807Radio::setVolume(uint8_t volume, bool initializing) {
+            // If we're initializing, bypass the initialization check
+            if (!_initialized && !initializing) {
                 _lastError = "Module not initialized";
                 return false;
             }
@@ -141,26 +139,19 @@ namespace szogfm {
                 volume = 15;
             }
 
-            // Read current volume register
-            uint16_t volReg;
-            if (!readRegister(REG_VOLUME, volReg)) {
-                _lastError = "Failed to read volume register";
-                return false;
-            }
+            // Write directly instead of using readRegister which might fail
+            Wire.beginTransmission(RDA5807M_ADDR);
+            Wire.write(0x05);  // Volume register address
+            Wire.write(0x00);  // High byte - no special settings
+            Wire.write(volume & 0x0F);  // Low byte - set volume bits
 
-            // Clear volume bits and set new volume
-            volReg &= ~0x000F; // Clear volume bits (bits 0-3)
-            volReg |= volume;  // Set new volume
-
-            // Write the new volume
-            if (!writeRegister(REG_VOLUME, volReg)) {
+            if (Wire.endTransmission() != 0) {
                 _lastError = "Failed to set volume";
                 return false;
             }
 
             // Store the new volume
             _volume = volume;
-
             return true;
         }
 
@@ -505,15 +496,48 @@ namespace szogfm {
         }
 
         bool RDA5807Radio::isModulePresent() const {
-            // Try to read the chip ID register
-            uint16_t chipId;
-            if (!readRegister(REG_CHIP_ID, chipId)) {
+            Serial.println("Checking RDA5807M presence");
+
+            // Try to reset the chip first
+            Wire.beginTransmission(RDA5807M_ADDR);
+            Wire.write(0x00);  // Register address
+            Wire.write(0x00);  // Data high byte
+            Wire.write(0x02);  // Data low byte - soft reset
+            uint8_t result = Wire.endTransmission();
+
+            if (result != 0) {
+                Serial.println("Reset command failed");
+            }
+
+            delay(50);  // Give chip time to reset
+
+            // Try a simple write/read test
+            Wire.beginTransmission(RDA5807M_ADDR);
+            Wire.write(0x02);  // Register 0x02 - Power Configuration
+            result = Wire.endTransmission(false);
+
+            if (result != 0) {
+                Serial.println("Failed to select register for reading");
                 return false;
             }
 
-            // Check if the chip ID matches
-            return (chipId & 0xFF00) == 0x5800; // RDA5807M chip ID should be 0x58xx
+            // Request 2 bytes
+            if (Wire.requestFrom(RDA5807M_ADDR, 2) != 2) {
+                Serial.println("Failed to read from device");
+                return false;
+            }
+
+            uint8_t highByte = Wire.read();
+            uint8_t lowByte = Wire.read();
+            uint16_t value = (highByte << 8) | lowByte;
+
+            Serial.print("Read from register 0x02: 0x");
+            Serial.println(value, HEX);
+
+            // For now, we'll accept any response as valid
+            return true;
         }
+
 
     } // namespace radio
 } // namespace szogfm

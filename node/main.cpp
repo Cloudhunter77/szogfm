@@ -28,8 +28,9 @@ void setup() {
 
     // Initialize SPI with VSPI pins for ST7789 display
     Serial.println("Configuring SPI bus for ST7789 display...");
-    // Configure SPI with CLK=18, MISO=19, MOSI=23, CS=35
-    szogfm::display::SpiSetup::configureVspi();
+
+    // Configure SPI with CLK=18, MISO=19, MOSI=23, CS=12
+    szogfm::display::SpiSetup::configureSpi(18, 19, 23, 12);
 
     // Initialize GPIO pins for display DC and RST
     pinMode(25, OUTPUT); // DC pin

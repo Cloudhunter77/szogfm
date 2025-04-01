@@ -26,7 +26,7 @@ namespace szogfm {
              * @param frequency FM frequency in 10kHz units (e.g., 8850 for 88.5 MHz)
              * @return true if frequency was set successfully, false otherwise
              */
-            virtual bool setFrequency(uint16_t frequency) = 0;
+            virtual bool setFrequency(uint16_t frequency, bool initializing = false) = 0;
 
             /**
              * Get the current FM frequency
@@ -39,7 +39,7 @@ namespace szogfm {
              * @param volume Volume level (0-15)
              * @return true if volume was set successfully, false otherwise
              */
-            virtual bool setVolume(uint8_t volume) = 0;
+            virtual bool setVolume(uint8_t volume, bool initializing = false) = 0;
 
             /**
              * Get the current volume level
