@@ -5,7 +5,7 @@
 #include "../common/NodeConfig.h"
 #include "../common/communication/EbyteCommModule.h"
 #include "../common/radio/RDA5807Radio.h"
-#include "../common/display/OledDisplaySPI.h"
+#include "../common/display/ST7789Display.h"
 #include "../common/input/ButtonHandler.h"
 
 namespace szogfm {
@@ -65,7 +65,7 @@ namespace szogfm {
             NodeConfig _config;
             communication::EbyteCommModule* _commModule;
             radio::RDA5807Radio* _radio;
-            display::OledDisplaySPI* _display;
+            display::ST7789Display* _display;
             input::ButtonHandler* _buttonHandler;
 
             // State variables

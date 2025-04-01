@@ -25,7 +25,7 @@ namespace szogfm {
                 SPI.begin(clkPin, misoPin, mosiPin, csPin);
 
                 // Set SPI parameters
-                SPI.setFrequency(8000000); // 8MHz
+                SPI.setFrequency(40000000); // 40MHz for ST7789
                 SPI.setDataMode(SPI_MODE0);
                 SPI.setBitOrder(MSBFIRST);
 
@@ -33,11 +33,12 @@ namespace szogfm {
             }
 
             /**
-             * Configure VSPI with our custom pins on ESP32
+             * Configure VSPI with our custom pins for ST7789 display
              * Custom VSPI pins: CLK=18, MISO=19, MOSI=23, CS=35
              * @return true if successful, false otherwise
              */
             static bool configureVspi() {
+                // Configure SPI for ST7789 display
                 return configureSpi(18, 19, 23, 35);
             }
 

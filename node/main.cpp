@@ -1,6 +1,6 @@
 #include <Arduino.h>
 #include <SPI.h>
-#include <WiFi.h>  // Add this line
+#include <WiFi.h>
 #include "NodeApplication.h"
 #include "../common/display/SpiSetup.h"
 
@@ -26,9 +26,15 @@ void setup() {
     WiFi.disconnect();
     WiFi.mode(WIFI_OFF);
 
-    // Initialize SPI with VSPI pins
-    Serial.println("Configuring SPI bus for display...");
+    // Initialize SPI with VSPI pins for ST7789 display
+    Serial.println("Configuring SPI bus for ST7789 display...");
+    // Configure SPI with CLK=18, MISO=19, MOSI=23, CS=35
     szogfm::display::SpiSetup::configureVspi();
+
+    // Initialize GPIO pins for display DC and RST
+    pinMode(25, OUTPUT); // DC pin
+    pinMode(26, OUTPUT); // RST pin
+    digitalWrite(26, HIGH); // RST active high
 
     // Initialize the node application
     if (!nodeApp.initialize()) {

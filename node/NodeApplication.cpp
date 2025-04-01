@@ -61,15 +61,18 @@ namespace szogfm {
             _radio->setMute(_config.isMuted());
             Serial.println("Radio parameters set");
 
-            // Initialize SPI OLED display
-            Serial.println("Initializing OLED display...");
-            // For SPI: CLK - D18, MISO - D19 (unused by display), MOSI - D23, CS - D35, DC - D17, RST - -1
-            _display = new display::OledDisplaySPI(128, 64, 18, 19, 23, 35, 17, -1);
+            // Initialize ST7789 TFT display
+            Serial.println("Initializing ST7789 TFT display...");
+            // CLK: GPIO18, MISO: GPIO19, MOSI: GPIO23, CS: GPIO35, RST: GPIO26, DC: GPIO25
+            _display = new display::ST7789Display(240, 240, 18, 19, 23, 35, 25, 26);
             if (!_display->initialize()) {
                 handleError("Failed to initialize display");
                 return false;
             }
-            Serial.println("OLED display initialized successfully");
+            Serial.println("ST7789 TFT display initialized successfully");
+
+            // Set display rotation if needed
+            _display->setRotation(2);  // Adjust based on your mounting orientation
 
             // Initialize communication module
             Serial.println("Initializing communication module...");
