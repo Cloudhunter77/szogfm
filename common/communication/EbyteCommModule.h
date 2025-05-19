@@ -55,6 +55,18 @@ namespace szogfm {
              */
             void printParameters();
 
+            /**
+             * Set debug level for verbose logging
+             * @param level Debug level (0=off, 1=basic, 2=verbose with hex dumps)
+             */
+            void setDebugLevel(uint8_t level);
+
+            /**
+             * Perform diagnostics on the module
+             * This tests various aspects of the module's functionality
+             */
+            void performDiagnostics();
+
         private:
             EBYTE* _ebyte;
             HardwareSerial* _serial;
@@ -66,12 +78,19 @@ namespace szogfm {
             int _lastRssi;
             uint8_t _channel;
             uint16_t _address;
+            uint8_t _debugLevel;
 
             // Buffer for received messages
             static constexpr size_t RX_BUFFER_SIZE = 256;
             uint8_t _rxBuffer[RX_BUFFER_SIZE];
             size_t _rxBufferLen;
             bool _hasMessage;
+
+            /**
+             * Test if the module is responding to basic communication
+             * @return true if module responds correctly, false otherwise
+             */
+            bool testCommunication();
 
             /**
              * Set the operating mode of the EBYTE module
@@ -86,6 +105,13 @@ namespace szogfm {
              * @return true if AUX pin went high within timeout, false otherwise
              */
             bool waitForAUX(unsigned long timeout = 1000);
+
+            /**
+             * Dump message contents as hex for debugging
+             * @param message Message data pointer
+             * @param length Message length in bytes
+             */
+            void dumpMessageHex(const void* message, size_t length);
         };
 
     } // namespace communication

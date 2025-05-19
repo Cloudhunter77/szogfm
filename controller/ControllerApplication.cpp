@@ -52,6 +52,12 @@ namespace szogfm {
             } else {
                 Serial.println("Communication module configured successfully");
             }
+            // Set high debug level for communication module
+            _commModule->setDebugLevel(2);
+            // Perform diagnostics on the module
+            _commModule->performDiagnostics();
+            // Print current module parameters
+            _commModule->printParameters();
 
             // Initialize WiFi and web server
             Serial.println("Initializing web server...");
@@ -101,15 +107,28 @@ namespace szogfm {
                 volume = 15;
             }
 
+            Serial.printf("Setting volume for node %d to %d\n", nodeId, volume);
+
             // Send command to set volume
-            return sendCommandMessage(nodeId, Command::SET_VOLUME, &volume, 1);
+            bool success = sendCommandMessage(nodeId, Command::SET_VOLUME, &volume, 1);
+
+            if (success) {
+                Serial.printf("Volume command sent successfully to node %d\n", nodeId);
+            } else {
+                Serial.printf("Failed to send volume command to node %d\n", nodeId);
+            }
+
+            return success;
         }
 
         bool ControllerApplication::setNodeFrequency(uint8_t nodeId, uint16_t frequency) {
             // Validate frequency range
             if (frequency < 8750 || frequency > 10800) {
+                Serial.printf("Invalid frequency value: %d (must be between 8750-10800)\n", frequency);
                 return false;
             }
+
+            Serial.printf("Setting frequency for node %d to %.1f MHz\n", nodeId, frequency/100.0);
 
             // Prepare data (little-endian: low byte first, high byte second)
             uint8_t data[2];
@@ -117,39 +136,75 @@ namespace szogfm {
             data[1] = (frequency >> 8) & 0xFF;
 
             // Send command to set frequency
-            return sendCommandMessage(nodeId, Command::SET_FREQUENCY, data, 2);
+            bool success = sendCommandMessage(nodeId, Command::SET_FREQUENCY, data, 2);
+
+            if (success) {
+                Serial.printf("Frequency command sent successfully to node %d\n", nodeId);
+            } else {
+                Serial.printf("Failed to send frequency command to node %d\n", nodeId);
+            }
+
+            return success;
         }
 
         bool ControllerApplication::setNodeRelayState(uint8_t nodeId, bool state) {
             // Prepare data
             uint8_t data = state ? 1 : 0;
 
+            Serial.printf("Setting relay state for node %d to %s\n", nodeId, state ? "ON" : "OFF");
+
             // Send command to set relay state
-            return sendCommandMessage(nodeId, Command::TOGGLE_RELAY, &data, 1);
+            bool success = sendCommandMessage(nodeId, Command::TOGGLE_RELAY, &data, 1);
+
+            if (success) {
+                Serial.printf("Relay command sent successfully to node %d\n", nodeId);
+            } else {
+                Serial.printf("Failed to send relay command to node %d\n", nodeId);
+            }
+
+            return success;
         }
 
         bool ControllerApplication::setNodeMute(uint8_t nodeId, bool mute) {
+            Serial.printf("Setting mute state for node %d to %s\n", nodeId, mute ? "MUTED" : "UNMUTED");
+
             // Send command to set mute state
             Command cmd = mute ? Command::MUTE : Command::UNMUTE;
-            return sendCommandMessage(nodeId, cmd, nullptr, 0);
+            bool success = sendCommandMessage(nodeId, cmd, nullptr, 0);
+
+            if (success) {
+                Serial.printf("Mute command sent successfully to node %d\n", nodeId);
+            } else {
+                Serial.printf("Failed to send mute command to node %d\n", nodeId);
+            }
+
+            return success;
         }
 
         bool ControllerApplication::setAllNodesVolume(uint8_t volume) {
+            Serial.printf("Setting volume for ALL nodes to %d\n", volume);
+
             // Send command to all nodes (node ID 0 = broadcast)
             return setNodeVolume(0, volume);
         }
 
         bool ControllerApplication::setAllNodesFrequency(uint16_t frequency) {
+            Serial.printf("Setting frequency for ALL nodes to %.1f MHz\n", frequency/100.0);
+
             // Send command to all nodes
             return setNodeFrequency(0, frequency);
         }
 
         bool ControllerApplication::setAllNodesRelayState(bool state) {
+            Serial.printf("Setting relay state for ALL nodes to %s\n", state ? "ON" : "OFF");
+
             // Send command to all nodes
             return setNodeRelayState(0, state);
         }
 
         bool ControllerApplication::setAllNodesMute(bool mute) {
+            Serial.printf("Setting mute state for ALL nodes to %s\n", mute ? "MUTED" : "UNMUTED");
+
             // Send command to all nodes
             return setNodeMute(0, mute);
         }
@@ -176,22 +231,45 @@ namespace szogfm {
         }
 
         bool ControllerApplication::requestNodeStatus(uint8_t nodeId) {
+            Serial.printf("Requesting status from node %d\n", nodeId);
+
             // Send command to request status
-            return sendCommandMessage(nodeId, Command::GET_STATUS, nullptr, 0);
+            bool success = sendCommandMessage(nodeId, Command::GET_STATUS, nullptr, 0);
+
+            if (success) {
+                Serial.printf("Status request sent successfully to node %d\n", nodeId);
+            } else {
+                Serial.printf("Failed to send status request to node %d\n", nodeId);
+            }
+
+            return success;
         }
 
         bool ControllerApplication::requestAllNodeStatus() {
+            Serial.println("Requesting status from ALL nodes");
+
             // Send status request to all nodes
             return requestNodeStatus(0);
         }
 
         bool ControllerApplication::resetNode(uint8_t nodeId) {
+            Serial.printf("Sending RESET command to node %d\n", nodeId);
+
             // Send command to reset node
-            return sendCommandMessage(nodeId, Command::RESET, nullptr, 0);
+            bool success = sendCommandMessage(nodeId, Command::RESET, nullptr, 0);
+
+            if (success) {
+                Serial.printf("Reset command sent successfully to node %d\n", nodeId);
+            } else {
+                Serial.printf("Failed to send reset command to node %d\n", nodeId);
+            }
+
+            return success;
         }
 
         bool ControllerApplication::handleNodeMessage(const void* message, size_t length, uint8_t senderNodeId) {
             if (!message || length < sizeof(MessageHeader)) {
+                Serial.println("Received invalid message (too short or null)");
                 return false;
             }
 
@@ -200,7 +278,7 @@ namespace szogfm {
 
             // Validate checksum
             if (!header->validateChecksum()) {
-                Serial.println("Received message has invalid checksum");
+                Serial.printf("Received message from node %d has invalid checksum\n", senderNodeId);
                 return false;
             }
 
@@ -208,23 +286,31 @@ namespace szogfm {
             switch (header->type) {
                 case MessageType::STATUS_RESPONSE:
                     if (length >= sizeof(StatusMessage)) {
+                        Serial.printf("Received status response from node %d\n", senderNodeId);
                         const StatusMessage* status = static_cast<const StatusMessage*>(message);
                         return handleStatusMessage(*status);
+                    } else {
+                        Serial.println("Status message too short");
                     }
                     break;
 
                 case MessageType::ACK:
                     if (length >= sizeof(AckMessage)) {
+                        Serial.printf("Received ACK from node %d\n", senderNodeId);
                         const AckMessage* ack = static_cast<const AckMessage*>(message);
                         return handleAckMessage(*ack);
+                    } else {
+                        Serial.println("ACK message too short");
                     }
                     break;
 
                 case MessageType::ERROR:
+                    Serial.printf("Received ERROR message from node %d\n", senderNodeId);
                     return handleErrorMessage(*header);
 
                 default:
-                    Serial.println("Received unknown message type");
+                    Serial.printf("Received unknown message type %d from node %d\n",
+                                  static_cast<int>(header->type), senderNodeId);
                     break;
             }
 
@@ -297,8 +383,11 @@ namespace szogfm {
             // Receive message
             size_t bytesReceived = _commModule->receiveMessage(buffer, sizeof(buffer), senderNodeId);
             if (bytesReceived == 0) {
+                Serial.println("No message received despite isMessageAvailable() returning true");
                 return false;
             }
+
+            Serial.printf("Received message from node %d (%d bytes)\n", senderNodeId, bytesReceived);
 
             // Handle the message
             return handleNodeMessage(buffer, bytesReceived, senderNodeId);
@@ -313,26 +402,39 @@ namespace szogfm {
                     // Message timed out, retry if retry count is not exceeded
                     if (it->retryCount < MAX_RETRY_COUNT) {
                         // Retry sending the message
+                        Serial.printf("Retrying message to node %d (sequence %d, attempt %d/%d)\n",
+                                      it->nodeId, it->sequenceNum, it->retryCount+1, MAX_RETRY_COUNT);
+
                         if (_commModule->sendMessage(it->nodeId, it->messageData.data(), it->messageData.size())) {
                             it->sentTime = currentTime;
                             it->retryCount++;
                             ++it;
                         } else {
                             // Failed to retry, remove from list
+                            Serial.printf("Failed to retry message to node %d (sequence %d)\n",
+                                          it->nodeId, it->sequenceNum);
                             it = _pendingMessages.erase(it);
                         }
                     } else {
                         // Max retry count exceeded, remove from list
+                        Serial.printf("Message to node %d (sequence %d) failed after %d attempts\n",
+                                      it->nodeId, it->sequenceNum, MAX_RETRY_COUNT);
                         it = _pendingMessages.erase(it);
                     }
                 } else {
                     ++it;
                 }
             }
+
+            // Log the number of pending messages if any
+            if (!_pendingMessages.empty()) {
+                Serial.printf("Pending messages: %d\n", _pendingMessages.size());
+            }
         }
 
         bool ControllerApplication::sendCommandMessage(uint8_t nodeId, Command command, const uint8_t* data, size_t dataLength) {
             if (!_initialized || !_commModule) {
+                Serial.println("Cannot send command: system not initialized");
                 return false;
             }
 
@@ -355,6 +457,10 @@ namespace szogfm {
             // Compute header checksum
             cmdMsg.header.setChecksum();
 
+            // Log message details
+            Serial.printf("Sending command %d to node %d (sequence %d)\n",
+                          static_cast<int>(command), nodeId, cmdMsg.header.sequenceNum);
+
             // Send message
             if (_commModule->sendMessage(nodeId, &cmdMsg, sizeof(MessageHeader) + sizeof(Command) + dataLength)) {
                 // Add to pending messages list for retry handling
@@ -369,15 +475,27 @@ namespace szogfm {
                 memcpy(pending.messageData.data(), &cmdMsg, pending.messageData.size());
 
                 _pendingMessages.push_back(pending);
+                Serial.printf("Command sent successfully, added to pending messages (%d total)\n",
+                              _pendingMessages.size());
 
                 return true;
             }
 
+            Serial.printf("Failed to send command %d to node %d\n",
+                          static_cast<int>(command), nodeId);
             return false;
         }
 
         bool ControllerApplication::handleStatusMessage(const szogfm::StatusMessage& status) {
             uint8_t nodeId = status.header.nodeId;
+
+            Serial.printf("Processing status from node %d:\n", nodeId);
+            Serial.printf("  - Frequency: %.1f MHz\n", status.frequency/100.0);
+            Serial.printf("  - Volume: %d\n", status.volume);
+            Serial.printf("  - Relay: %s\n", status.relayState ? "ON" : "OFF");
+            Serial.printf("  - RSSI: %d\n", status.rssi);
+            Serial.printf("  - Stereo: %s\n", status.isStereo ? "Yes" : "No");
+            Serial.printf("  - Uptime: %lu ms\n", status.uptime);
 
             // Create or update node status
             NodeStatus& nodeStatus = _nodeStatus[nodeId];
@@ -401,12 +519,12 @@ namespace szogfm {
                 nodeStatus.temperature = status.temperature;
                 nodeStatus.humidity = status.humidity;
                 nodeStatus.hasSensors = true;
+                Serial.printf("  - Temperature: %.1f°C\n", status.temperature);
+                Serial.printf("  - Humidity: %.1f%%\n", status.humidity);
             } else {
                 nodeStatus.hasSensors = false;
+                Serial.println("  - No sensor data available");
             }
-
-            Serial.print("Updated status for node ");
-            Serial.println(nodeId);
 
             return true;
         }
@@ -419,26 +537,31 @@ namespace szogfm {
                 if (it->sequenceNum == ackSeq) {
                     _pendingMessages.erase(it);
 
-                    Serial.print("Received ACK for message ");
-                    Serial.println(ackSeq);
+                    Serial.printf("Received ACK for message %d from node %d - %s\n",
+                                  ackSeq, ack.header.nodeId,
+                                  ack.success ? "SUCCESS" : "FAILED");
+
+                    if (!ack.success) {
+                        Serial.printf("  Error code: %d\n", ack.errorCode);
+                    }
 
                     return true;
                 }
             }
 
-            Serial.print("Received ACK for unknown message ");
-            Serial.println(ackSeq);
+            Serial.printf("Received ACK for unknown message %d from node %d\n",
+                          ackSeq, ack.header.nodeId);
 
             return false;
         }
 
         bool ControllerApplication::handleErrorMessage(const MessageHeader& error) {
-            Serial.print("Received error message from node ");
-            Serial.println(error.nodeId);
+            Serial.printf("Received error message from node %d\n", error.nodeId);
 
             // Update node status to indicate error
             if (_nodeStatus.find(error.nodeId) != _nodeStatus.end()) {
                 _nodeStatus[error.nodeId].errorMessage = "Error reported by node";
+                Serial.println("  Node status updated to show error");
             }
 
             return true;
@@ -455,14 +578,15 @@ namespace szogfm {
                 if (status.isConnected && currentTime - status.lastSeenTime > NODE_TIMEOUT) {
                     status.isConnected = false;
 
-                    Serial.print("Node ");
-                    Serial.print(status.nodeId);
-                    Serial.println(" disconnected (timeout)");
+                    Serial.printf("Node %d disconnected (timeout after %d seconds)\n",
+                                  status.nodeId, NODE_TIMEOUT/1000);
                 }
             }
         }
 
         void ControllerApplication::handleRoot() {
+            Serial.println("Web request: GET /");
+
             // Serve the main HTML page
             String html = "<!DOCTYPE html><html><head>";
             html += "<title>SzogFM Controller</title>";
@@ -628,15 +752,20 @@ namespace szogfm {
             html += "</body></html>";
 
             _webServer->send(200, "text/html", html);
+            Serial.println("Web UI served successfully");
         }
 
         void ControllerApplication::handleStatus() {
+            Serial.println("Web request: GET /status");
+
             // Create JSON response with node status
             DynamicJsonDocument doc(4096);
             JsonArray nodesArray = doc.createNestedArray("nodes");
 
+            int nodeCount = 0;
             for (const auto& pair : _nodeStatus) {
                 const NodeStatus& status = pair.second;
+                nodeCount++;
 
                 JsonObject nodeObj = nodesArray.createNestedObject();
                 nodeObj["id"] = status.nodeId;
@@ -666,11 +795,13 @@ namespace szogfm {
             serializeJson(doc, jsonResponse);
 
             _webServer->send(200, "application/json", jsonResponse);
+            Serial.printf("Status sent for %d nodes\n", nodeCount);
         }
 
         void ControllerApplication::handleSetVolume() {
             // Check parameters
             if (!_webServer->hasArg("node_id") || !_webServer->hasArg("volume")) {
+                Serial.println("Web request: POST /set_volume - Missing parameters");
                 _webServer->send(400, "text/plain", "Missing parameters");
                 return;
             }
@@ -678,15 +809,19 @@ namespace szogfm {
             uint8_t nodeId = _webServer->arg("node_id").toInt();
             uint8_t volume = _webServer->arg("volume").toInt();
 
+            Serial.printf("Web request: POST /set_volume - Node: %d, Volume: %d\n", nodeId, volume);
+
             // Set volume
             bool success = setNodeVolume(nodeId, volume);
 
             _webServer->send(success ? 200 : 500, "text/plain", success ? "OK" : "Failed");
+            Serial.printf("Volume command %s\n", success ? "succeeded" : "failed");
         }
 
         void ControllerApplication::handleSetFrequency() {
             // Check parameters
             if (!_webServer->hasArg("node_id") || !_webServer->hasArg("frequency")) {
+                Serial.println("Web request: POST /set_frequency - Missing parameters");
                 _webServer->send(400, "text/plain", "Missing parameters");
                 return;
             }
@@ -694,15 +829,20 @@ namespace szogfm {
             uint8_t nodeId = _webServer->arg("node_id").toInt();
             uint16_t frequency = _webServer->arg("frequency").toInt();
 
+            Serial.printf("Web request: POST /set_frequency - Node: %d, Frequency: %d (%.1f MHz)\n",
+                          nodeId, frequency, frequency/100.0);
+
             // Set frequency
             bool success = setNodeFrequency(nodeId, frequency);
 
             _webServer->send(success ? 200 : 500, "text/plain", success ? "OK" : "Failed");
+            Serial.printf("Frequency command %s\n", success ? "succeeded" : "failed");
         }
 
         void ControllerApplication::handleSetRelay() {
             // Check parameters
             if (!_webServer->hasArg("node_id") || !_webServer->hasArg("state")) {
+                Serial.println("Web request: POST /set_relay - Missing parameters");
                 _webServer->send(400, "text/plain", "Missing parameters");
                 return;
             }
@@ -710,15 +850,20 @@ namespace szogfm {
             uint8_t nodeId = _webServer->arg("node_id").toInt();
             bool state = _webServer->arg("state").toInt() != 0;
 
+            Serial.printf("Web request: POST /set_relay - Node: %d, State: %s\n",
+                          nodeId, state ? "ON" : "OFF");
+
             // Set relay state
             bool success = setNodeRelayState(nodeId, state);
 
             _webServer->send(success ? 200 : 500, "text/plain", success ? "OK" : "Failed");
+            Serial.printf("Relay command %s\n", success ? "succeeded" : "failed");
         }
 
         void ControllerApplication::handleSetMute() {
             // Check parameters
             if (!_webServer->hasArg("node_id") || !_webServer->hasArg("mute")) {
+                Serial.println("Web request: POST /set_mute - Missing parameters");
                 _webServer->send(400, "text/plain", "Missing parameters");
                 return;
             }
@@ -726,25 +871,33 @@ namespace szogfm {
             uint8_t nodeId = _webServer->arg("node_id").toInt();
             bool mute = _webServer->arg("mute").toInt() != 0;
 
+            Serial.printf("Web request: POST /set_mute - Node: %d, Mute: %s\n",
+                          nodeId, mute ? "MUTED" : "UNMUTED");
+
             // Set mute state
             bool success = setNodeMute(nodeId, mute);
 
             _webServer->send(success ? 200 : 500, "text/plain", success ? "OK" : "Failed");
+            Serial.printf("Mute command %s\n", success ? "succeeded" : "failed");
         }
 
         void ControllerApplication::handleResetNode() {
             // Check parameters
             if (!_webServer->hasArg("node_id")) {
+                Serial.println("Web request: POST /reset_node - Missing parameters");
                 _webServer->send(400, "text/plain", "Missing parameters");
                 return;
             }
 
             uint8_t nodeId = _webServer->arg("node_id").toInt();
 
+            Serial.printf("Web request: POST /reset_node - Node: %d\n", nodeId);
+
             // Reset node
             bool success = resetNode(nodeId);
 
             _webServer->send(success ? 200 : 500, "text/plain", success ? "OK" : "Failed");
+            Serial.printf("Reset command %s\n", success ? "succeeded" : "failed");
         }
 
     } // namespace controller

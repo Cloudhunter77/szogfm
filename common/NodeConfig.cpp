@@ -3,7 +3,7 @@
 namespace szogfm {
 
     NodeConfig::NodeConfig(uint8_t defaultNodeId)
-            : _version(CURRENT_VERSION), _nodeId(defaultNodeId), _fmFrequency(8850),
+            : _version(CURRENT_VERSION), _nodeId(defaultNodeId), _fmFrequency(9480),
               _volume(8), _muted(false), _relayState(false),
               _radioAddress(0x1234), _radioChannel(0x1A), _displayBrightness(128),
               _modified(false) {
@@ -89,7 +89,7 @@ namespace szogfm {
         // Reset to default values
         _version = CURRENT_VERSION;
         // Keep the existing node ID
-        _fmFrequency = 8850; // 88.5 MHz
+        _fmFrequency = 9480; // 88.5 MHz
         _volume = 8;
         _muted = false;
         _relayState = false;

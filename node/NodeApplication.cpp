@@ -159,6 +159,13 @@ namespace szogfm {
                 Serial.println("Communication module configured successfully");
             }
 
+            // Set high debug level for communication module
+            _commModule->setDebugLevel(2);
+            // Perform diagnostics on the module
+            _commModule->performDiagnostics();
+            // Print current module parameters
+            _commModule->printParameters();
+
             // Initialize relay control pin
             Serial.println("Initializing relay control...");
             pinMode(_pinRelayControl, OUTPUT);
@@ -231,51 +238,162 @@ namespace szogfm {
         }
 
         bool NodeApplication::handleCommand(const CommandMessage& message) {
+            // Add detailed logging
+            Serial.printf("\n[CMD] Received command: %d, Seq: %d from node %d\n",
+                          static_cast<int>(message.command),
+                          message.header.sequenceNum,
+                          message.header.nodeId);
+
             // Process the command based on type
             bool success = false;
 
             switch (message.command) {
                 case Command::SET_VOLUME:
-                    success = processSetVolumeCommand(message.data[0]);
+                {
+                    uint8_t volume = message.data[0];
+                    Serial.printf("[CMD] SET_VOLUME command: volume=%d\n", volume);
+
+                    // First update display to confirm command receipt
+                    if (_display) {
+                        Serial.println("[CMD] Updating display with new volume");
+                        _display->displayVolume(volume, _config.isMuted());
+                        _display->update();
+                    }
+
+                    // Actually process the command
+                    success = processSetVolumeCommand(volume);
+                    Serial.printf("[CMD] SET_VOLUME result: %s\n", success ? "SUCCESS" : "FAILED");
+                    if (success) {
+                        Serial.printf("[CMD] New volume set: %d\n", _config.getVolume());
+                    } else {
+                        Serial.printf("[CMD] Current volume unchanged: %d\n", _config.getVolume());
+                    }
+                }
                     break;
 
                 case Command::SET_FREQUENCY:
                 {
                     // Extract frequency from data bytes
                     uint16_t frequency = message.data[0] | (message.data[1] << 8);
+                    Serial.printf("[CMD] SET_FREQUENCY command: frequency=%d (%.1f MHz)\n",
+                                  frequency, frequency/100.0);
+
+                    // First update display to confirm command receipt
+                    if (_display) {
+                        Serial.println("[CMD] Updating display with new frequency");
+                        _display->displayFrequency(frequency);
+                        _display->update();
+                    }
+
+                    // Actually process the command
                     success = processSetFrequencyCommand(frequency);
+                    Serial.printf("[CMD] SET_FREQUENCY result: %s\n", success ? "SUCCESS" : "FAILED");
+                    if (success) {
+                        Serial.printf("[CMD] New frequency set: %d (%.1f MHz)\n",
+                                      _config.getFmFrequency(), _config.getFmFrequency()/100.0);
+                    } else {
+                        Serial.printf("[CMD] Current frequency unchanged: %d (%.1f MHz)\n",
+                                      _config.getFmFrequency(), _config.getFmFrequency()/100.0);
+                    }
                 }
                     break;
 
                 case Command::TOGGLE_RELAY:
-                    success = processToggleRelayCommand(message.data[0] != 0);
+                {
+                    bool state = message.data[0] != 0;
+                    Serial.printf("[CMD] TOGGLE_RELAY command: relay=%s\n", state ? "ON" : "OFF");
+
+                    // First update display to confirm command receipt
+                    if (_display) {
+                        Serial.println("[CMD] Updating display with new relay state");
+                        _display->displayNodeInfo(_config.getNodeId(), state);
+                        _display->update();
+                    }
+
+                    // Actually process the command
+                    success = processToggleRelayCommand(state);
+                    Serial.printf("[CMD] TOGGLE_RELAY result: %s\n", success ? "SUCCESS" : "FAILED");
+                    Serial.printf("[CMD] Current relay state: %s\n",
+                                  _config.getRelayState() ? "ON" : "OFF");
+                }
                     break;
 
                 case Command::MUTE:
+                    Serial.println("[CMD] MUTE command received");
+
+                    // First update display to confirm command receipt
+                    if (_display) {
+                        Serial.println("[CMD] Updating display with mute state");
+                        _display->displayVolume(_config.getVolume(), true);
+                        _display->update();
+                    }
+
+                    // Actually process the command
                     success = processMuteCommand(true);
+                    Serial.printf("[CMD] MUTE result: %s\n", success ? "SUCCESS" : "FAILED");
+                    Serial.printf("[CMD] Current mute state: %s\n",
+                                  _config.isMuted() ? "MUTED" : "UNMUTED");
                     break;
 
                 case Command::UNMUTE:
+                    Serial.println("[CMD] UNMUTE command received");
+
+                    // First update display to confirm command receipt
+                    if (_display) {
+                        Serial.println("[CMD] Updating display with unmute state");
+                        _display->displayVolume(_config.getVolume(), false);
+                        _display->update();
+                    }
+
+                    // Actually process the command
                     success = processMuteCommand(false);
+                    Serial.printf("[CMD] UNMUTE result: %s\n", success ? "SUCCESS" : "FAILED");
+                    Serial.printf("[CMD] Current mute state: %s\n",
+                                  _config.isMuted() ? "MUTED" : "UNMUTED");
                     break;
 
                 case Command::RESET:
                     // Reset the node
+                    Serial.println("[CMD] RESET command received - Restarting ESP32...");
+
+                    // Send acknowledgement before resetting
+                    sendAcknowledgement(message.header.sequenceNum, true);
+
+                    delay(500);  // Small delay to allow ACK to be sent
+
                     ESP.restart();
                     success = true; // This will never be reached
                     break;
 
                 case Command::GET_STATUS:
+                    Serial.println("[CMD] GET_STATUS command received");
                     success = sendStatusMessage();
+                    Serial.printf("[CMD] Status message sent: %s\n", success ? "SUCCESS" : "FAILED");
                     break;
 
                 default:
+                    Serial.printf("[CMD] UNKNOWN command code: %d\n", static_cast<int>(message.command));
                     success = false;
                     break;
             }
 
-            // Send acknowledgement
-            sendAcknowledgement(message.header.sequenceNum, success);
+            // Check if radio module is responding
+            if (_radio) {
+                int rssi = _radio->getRssi();
+                bool stereo = _radio->isStereo();
+                bool tuned = _radio->isTunedToStation();
+                Serial.printf("[CMD] Radio status - RSSI: %d, Stereo: %s, Tuned: %s\n",
+                              rssi, stereo ? "Yes" : "No", tuned ? "Yes" : "No");
+            } else {
+                Serial.println("[CMD] WARNING: Radio module pointer is null!");
+            }
+
+            // Send acknowledgement (unless it was a RESET command, which already sent the ACK)
+            if (message.command != Command::RESET) {
+                Serial.printf("[CMD] Sending ACK for sequence %d, success=%s\n",
+                              message.header.sequenceNum, success ? "true" : "false");
+                sendAcknowledgement(message.header.sequenceNum, success);
+            }
 
             return success;
         }
