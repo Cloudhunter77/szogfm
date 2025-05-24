@@ -31,6 +31,30 @@ namespace szogfm {
             bool hasSensors;
             unsigned long uptime;
             std::string errorMessage;
+
+            // Enhanced debugging fields
+            unsigned long lastCommandTime;
+            std::string lastCommand;
+            bool lastCommandSuccess;
+            uint16_t totalCommands;
+            uint16_t successfulCommands;
+            uint16_t failedCommands;
+            unsigned long totalResponseTime;
+            std::string firmwareVersion;
+        };
+
+/**
+ * Structure to hold communication statistics
+ */
+        struct CommunicationStats {
+            unsigned long totalMessagesSent;
+            unsigned long totalMessagesReceived;
+            unsigned long totalRetries;
+            unsigned long totalTimeouts;
+            unsigned long totalErrors;
+            float averageResponseTime;
+            float messageSuccessRate;
+            unsigned long lastResetTime;
         };
 
 /**
@@ -158,6 +182,42 @@ namespace szogfm {
              */
             bool handleNodeMessage(const void* message, size_t length, uint8_t senderNodeId);
 
+            /**
+             * Get communication statistics
+             * @return Communication statistics structure
+             */
+            const CommunicationStats& getCommunicationStats() const { return _commStats; }
+
+            /**
+             * Reset communication statistics
+             */
+            void resetCommunicationStats();
+
+            /**
+             * Get detailed system status for debugging
+             * @return JSON string with detailed status
+             */
+            String getDetailedSystemStatus() const;
+
+            /**
+             * Enable or disable verbose debugging
+             * @param enable true to enable verbose debugging
+             */
+            void setVerboseDebugging(bool enable) { _verboseDebugging = enable; }
+
+            /**
+             * Force discovery of new nodes
+             * @return number of nodes discovered
+             */
+            int discoverNodes();
+
+            /**
+             * Test communication with a specific node
+             * @param nodeId Node ID to test
+             * @return true if communication test successful
+             */
+            bool testNodeCommunication(uint8_t nodeId);
+
         private:
             // Components
             communication::EbyteCommModule* _commModule;
@@ -169,6 +229,11 @@ namespace szogfm {
             uint16_t _messageSequence;
             unsigned long _lastStatusRequestTime;
             unsigned long _lastWebUpdateTime;
+            unsigned long _lastDiscoveryTime;
+            bool _verboseDebugging;
+
+            // Communication statistics
+            CommunicationStats _commStats;
 
             // Pending messages
             struct PendingMessage {
@@ -177,6 +242,8 @@ namespace szogfm {
                 unsigned long sentTime;
                 uint8_t retryCount;
                 std::vector<uint8_t> messageData;
+                std::string commandDescription;
+                unsigned long firstSentTime;
             };
             std::vector<PendingMessage> _pendingMessages;
 
@@ -188,8 +255,10 @@ namespace szogfm {
             // Constants
             static constexpr unsigned long STATUS_REQUEST_INTERVAL = 10000;    // 10 seconds
             static constexpr unsigned long WEB_UPDATE_INTERVAL = 1000;         // 1 second
-            static constexpr unsigned long MESSAGE_TIMEOUT = 2000;             // 2 seconds
-            static constexpr uint8_t MAX_RETRY_COUNT = 3;                      // Max message retry count
+            static constexpr unsigned long MESSAGE_TIMEOUT = 3000;             // 3 seconds (increased)
+            static constexpr unsigned long DISCOVERY_INTERVAL = 60000;         // 60 seconds
+            static constexpr uint8_t MAX_RETRY_COUNT = 5;                      // Increased retry count
+            static constexpr unsigned long NODE_TIMEOUT = 120000;              // 2 minutes (increased)
 
             // WiFi configuration
             const char* _wifiSsid;
@@ -219,9 +288,11 @@ namespace szogfm {
              * @param command Command to send
              * @param data Data to include with the command
              * @param dataLength Length of the data
+             * @param description Human-readable description of the command
              * @return true if the message was sent successfully, false otherwise
              */
-            bool sendCommandMessage(uint8_t nodeId, Command command, const uint8_t* data, size_t dataLength);
+            bool sendCommandMessage(uint8_t nodeId, Command command, const uint8_t* data,
+                                    size_t dataLength, const String& description = "");
 
             /**
              * Handle a received status message from a node
@@ -250,14 +321,33 @@ namespace szogfm {
              */
             void updateNodeConnectionStatus();
 
-            // Web server handler functions
+            /**
+             * Log detailed message information
+             */
+            void logMessageDetails(const String& direction, uint8_t nodeId,
+                                   const String& messageType, const void* message, size_t length);
+
+            /**
+             * Update communication statistics
+             */
+            void updateCommStats(bool success, unsigned long responseTime = 0);
+
+            // Enhanced web server handler functions
             void handleRoot();
             void handleStatus();
+            void handleDetailedStatus();
+            void handleCommStats();
+            void handleSystemDiagnostics();
+            void handleNodeDiagnostics();
             void handleSetVolume();
             void handleSetFrequency();
             void handleSetRelay();
             void handleSetMute();
             void handleResetNode();
+            void handleDiscoverNodes();
+            void handleTestNode();
+            void handleResetStats();
+            void handleCommTest();
         };
 
     } // namespace controller

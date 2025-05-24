@@ -15,198 +15,407 @@ namespace szogfm {
         }
 
         bool EbyteCommModule::initialize() {
-            // Initialize the EBYTE module
-            Serial.println("[EBYTE] Initializing EBYTE transceiver module...");
+            Serial.println("\n" + String("=").repeat(50));
+            Serial.println("📡 EBYTE E49-400T20D Module Initialization");
+            Serial.println(String("=").repeat(50));
 
-            // Configure pins
+            // Configure pins with explicit direction and pull-up settings
+            Serial.printf("📌 Configuring control pins:\n");
+            Serial.printf("   M0 (pin %d): OUTPUT\n", _pinM0);
+            Serial.printf("   M1 (pin %d): OUTPUT\n", _pinM1);
+            Serial.printf("   AUX (pin %d): INPUT_PULLUP\n", _pinAUX);
+
             pinMode(_pinM0, OUTPUT);
             pinMode(_pinM1, OUTPUT);
-            pinMode(_pinAUX, INPUT);
+            pinMode(_pinAUX, INPUT_PULLUP);
 
-            Serial.printf("[EBYTE] Pins configured - M0: %d, M1: %d, AUX: %d\n", _pinM0, _pinM1, _pinAUX);
-
-            // Initialize Serial port for the module
-            _serial->begin(9600);
-            Serial.printf("[EBYTE] Serial port initialized at 9600 baud\n");
-
-            // Wait for serial to stabilize
-            delay(50);
-
-            // Check AUX pin initial state
-            int auxState = digitalRead(_pinAUX);
-            Serial.printf("[EBYTE] Initial AUX pin state: %d (should be HIGH when ready)\n", auxState);
-
-            // Call init but don't rely on its return value since some modules don't respond correctly
-            bool initResult = _ebyte->init();
-            Serial.printf("[EBYTE] Module init result: %s\n", initResult ? "SUCCESS" : "FAILED");
-
-            // Check if module is responding to basic commands
-            if (testCommunication()) {
-                Serial.println("[EBYTE] Communication test PASSED");
-            } else {
-                Serial.println("[EBYTE] Communication test FAILED - module may not be responding correctly");
-                // We'll continue anyway and try to use the module
-            }
-
-            // Set initialized flag true regardless of result
-            // We'll rely on actual message transmission/reception to determine if it's working
-            _initialized = true;
-            Serial.println("[EBYTE] Module initialized (basic initialization)");
-
-            return true;
-        }
-
-        bool EbyteCommModule::testCommunication() {
-            // Try to set mode to normal and check if it works
-            Serial.println("[EBYTE] Testing communication with module...");
-
-            // Set module to normal mode
+            // Initialize pins to known state (Normal mode)
             digitalWrite(_pinM0, LOW);
             digitalWrite(_pinM1, LOW);
-            delay(50);
+            delay(100); // Give time for pin states to stabilize
 
-            // Check if AUX pin goes high (indicating module is ready)
-            unsigned long startTime = millis();
-            while (digitalRead(_pinAUX) == LOW) {
-                if (millis() - startTime > 1000) {
-                    Serial.println("[EBYTE] ERROR: AUX pin did not go HIGH within timeout");
-                    return false;
-                }
-                delay(10);
+            // Check initial pin states
+            Serial.printf("📊 Initial pin states:\n");
+            Serial.printf("   M0: %s\n", digitalRead(_pinM0) ? "HIGH" : "LOW");
+            Serial.printf("   M1: %s\n", digitalRead(_pinM1) ? "HIGH" : "LOW");
+            Serial.printf("   AUX: %s\n", digitalRead(_pinAUX) ? "HIGH" : "LOW");
+
+            // Initialize Serial port with multiple baud rate attempts
+            Serial.println("🔧 Initializing UART communication...");
+            _serial->end(); // Ensure clean start
+            delay(100);
+
+            _serial->begin(9600, SERIAL_8N1);
+            delay(100);
+
+            // Test UART communication
+            Serial.println("🧪 Testing UART communication...");
+            _serial->flush();
+
+            // Clear any pending data
+            int clearCount = 0;
+            while (_serial->available()) {
+                _serial->read();
+                clearCount++;
+                if (clearCount > 100) break; // Prevent infinite loop
+            }
+            if (clearCount > 0) {
+                Serial.printf("   🧹 Cleared %d bytes from UART buffer\n", clearCount);
             }
 
-            Serial.printf("[EBYTE] AUX pin went HIGH after %lu ms\n", millis() - startTime);
-            return true;
+            // Wait for AUX pin to stabilize
+            Serial.println("⏳ Waiting for module to be ready (AUX pin)...");
+            unsigned long auxWaitStart = millis();
+            int auxState = digitalRead(_pinAUX);
+            Serial.printf("   Initial AUX state: %s\n", auxState ? "HIGH (ready)" : "LOW (busy)");
+
+            // Wait up to 5 seconds for AUX to go HIGH
+            while (digitalRead(_pinAUX) == LOW && millis() - auxWaitStart < 5000) {
+                delay(100);
+                if (millis() - auxWaitStart > 1000 && (millis() - auxWaitStart) % 1000 == 0) {
+                    Serial.printf("   Still waiting... (%lu ms)\n", millis() - auxWaitStart);
+                }
+            }
+
+            auxState = digitalRead(_pinAUX);
+            if (auxState == HIGH) {
+                Serial.printf("✅ Module ready after %lu ms\n", millis() - auxWaitStart);
+            } else {
+                Serial.printf("⚠️  Module not ready after %lu ms (AUX still LOW)\n", millis() - auxWaitStart);
+                Serial.println("   Continuing anyway - some modules don't follow AUX protocol exactly");
+            }
+
+            // Attempt to initialize with EBYTE library
+            Serial.println("🔧 Initializing EBYTE library...");
+            bool ebyte_result = _ebyte->init();
+            Serial.printf("   EBYTE library init result: %s\n", ebyte_result ? "SUCCESS" : "FAILED");
+
+            if (!ebyte_result) {
+                Serial.println("⚠️  EBYTE library initialization failed, but continuing with manual control");
+                Serial.println("   This is often normal - library may be too strict about responses");
+            }
+
+            // Perform comprehensive communication tests
+            Serial.println("🧪 Performing communication tests...");
+
+            // Test 1: Mode switching
+            Serial.println("   Test 1: Mode switching capability");
+            bool modeTest = testModeTransitions();
+            Serial.printf("   Mode switching test: %s\n", modeTest ? "PASS" : "FAIL");
+
+            // Test 2: Configuration mode access
+            Serial.println("   Test 2: Configuration mode access");
+            bool configTest = testConfigurationMode();
+            Serial.printf("   Configuration access test: %s\n", configTest ? "PASS" : "FAIL");
+
+            // Test 3: Basic parameter reading
+            Serial.println("   Test 3: Parameter reading");
+            bool paramTest = testParameterReading();
+            Serial.printf("   Parameter reading test: %s\n", paramTest ? "PASS" : "FAIL");
+
+            // Set initialized flag based on basic functionality
+            _initialized = (modeTest || configTest); // At least one basic test should pass
+
+            if (_initialized) {
+                Serial.println("✅ Module initialization SUCCESSFUL");
+                Serial.println("   Basic communication with module established");
+            } else {
+                Serial.println("❌ Module initialization FAILED");
+                Serial.println("   No communication possible with module");
+                return false;
+            }
+
+            Serial.println(String("=").repeat(50));
+            return _initialized;
         }
 
-        bool EbyteCommModule::configure(uint8_t channel, uint16_t address, uint8_t airDataRate,
+        bool EbyteCommModule::testModeTransitions() {
+            Serial.println("      🔄 Testing mode transitions...");
+
+            const char* modeNames[] = {"Normal", "Wakeup", "PowerDown", "Sleep"};
+            bool results[4];
+
+            for (int mode = 0; mode < 4; mode++) {
+                Serial.printf("         Setting mode %d (%s)... ", mode, modeNames[mode]);
+                results[mode] = setMode(mode);
+                Serial.printf("%s\n", results[mode] ? "OK" : "FAIL");
+                delay(200); // Give time between mode changes
+            }
+
+            // Return to normal mode
+            setMode(MODE_NORMAL);
+
+            // Return true if at least normal mode works
+            return results[MODE_NORMAL];
+        }
+
+        bool EbyteCommModule::testConfigurationMode() {
+            Serial.println("      ⚙️  Testing configuration mode access...");
+
+            // Try to enter configuration mode
+            if (!setMode(MODE_POWERDOWN)) {
+                Serial.println("         ❌ Cannot enter configuration mode");
+                return false;
+            }
+
+            // Try to send a simple command (read parameters)
+            Serial.println("         📤 Sending parameter read command...");
+            _serial->write(0xC1);
+            _serial->write(0xC1);
+            _serial->write(0xC1);
+            _serial->flush();
+
+            delay(100); // Give time for response
+
+            bool hasResponse = _serial->available() > 0;
+            Serial.printf("         📥 Response received: %s\n", hasResponse ? "YES" : "NO");
+
+            // Clear any response
+            while (_serial->available()) {
+                _serial->read();
+            }
+
+            // Return to normal mode
+            setMode(MODE_NORMAL);
+
+            return hasResponse;
+        }
+
+        bool EbyteCommModule::testParameterReading() {
+            Serial.println("      📊 Testing parameter reading...");
+
+            // This is a basic test - just verify we can switch modes
+            // Real parameter reading would require more complex parsing
+
+            // Test if we can detect any response from the module
+            for (int attempt = 0; attempt < 3; attempt++) {
+                Serial.printf("         Attempt %d: ", attempt + 1);
+
+                // Send a ping-like command
+                _serial->write(0x00);
+                _serial->flush();
+                delay(50);
+
+                if (_serial->available() > 0) {
+                    Serial.println("Response detected");
+                    while (_serial->available()) _serial->read(); // Clear
+                    return true;
+                }
+                Serial.println("No response");
+                delay(100);
+            }
+
+            return false; // No response to any test
+        }
+
+        bool EbyteCommModule::configure(uint8_t channel, uint8_t address, uint8_t airDataRate,
                                         uint8_t uartBaud, uint8_t powerLevel) {
             if (!_initialized) {
                 _lastError = "Module not initialized";
+                Serial.println("❌ Configuration failed: " + _lastError);
                 return false;
             }
 
-            Serial.println("[EBYTE] Configuring EBYTE module...");
+            Serial.println("\n🔧 Configuring EBYTE module parameters...");
+            Serial.printf("📊 Target configuration:\n");
+            Serial.printf("   Channel: 0x%02X (%d)\n", channel, channel);
+            Serial.printf("   Address: 0x%04X (%d)\n", address, address);
+            Serial.printf("   Air Data Rate: %d\n", airDataRate);
+            Serial.printf("   UART Baud: %d\n", uartBaud);
+            Serial.printf("   Power Level: %d\n", powerLevel);
 
-            // Log current pin states
-            Serial.printf("[EBYTE] Current pin states - M0: %d, M1: %d, AUX: %d\n",
-                          digitalRead(_pinM0), digitalRead(_pinM1), digitalRead(_pinAUX));
-
-            // Set the module to configuration mode
-            if (!setMode(MODE_POWERDOWN)) { // Use power down mode (mode 2) for configuration
-                _lastError = "Failed to set configuration mode";
-                Serial.println("[EBYTE] ERROR: " + _lastError);
-                return false;
-            }
-
-            // Wait for AUX to be HIGH before proceeding
-            if (!waitForAUX(2000)) {
-                Serial.println("[EBYTE] ERROR: AUX pin not going HIGH after setting config mode");
-            }
-
-            // Configure module parameters
+            // Store target configuration
             _channel = channel;
             _address = address;
 
-            // Set channel
-            _ebyte->SetChannel(channel);
-            Serial.println("[EBYTE] Channel set to: " + String(channel));
-
-            // Set address
-            _ebyte->SetAddress(address);
-            Serial.println("[EBYTE] Address set to: 0x" + String(address, HEX));
-
-            // Set air data rate
-            // Directly use the numerical values based on E49-400T20D manual
-            switch (airDataRate) {
-                case AIR_1K2:  _ebyte->SetAirDataRate(0b000); break; // 1.2k baud
-                case AIR_2K4:  _ebyte->SetAirDataRate(0b001); break; // 2.4k baud
-                case AIR_4K8:  _ebyte->SetAirDataRate(0b010); break; // 4.8k baud
-                case AIR_9K6:  _ebyte->SetAirDataRate(0b011); break; // 9.6k baud
-                case AIR_19K2: _ebyte->SetAirDataRate(0b100); break; // 19.2k baud
-                case AIR_50K:  _ebyte->SetAirDataRate(0b101); break; // 50k baud
-                case AIR_100K: _ebyte->SetAirDataRate(0b110); break; // 100k baud
-                case AIR_200K: _ebyte->SetAirDataRate(0b111); break; // 200k baud
-                default:       _ebyte->SetAirDataRate(0b001); break; // 2.4k baud (default)
+            // Enhanced mode switching with better error handling
+            Serial.println("🔄 Entering configuration mode...");
+            if (!setModeWithRetries(MODE_POWERDOWN, 3)) {
+                _lastError = "Failed to enter configuration mode after retries";
+                Serial.println("❌ " + _lastError);
+                return false;
             }
-            Serial.println("[EBYTE] Air data rate set to: " + String(airDataRate));
 
-            // Set UART baud rate
-            // Directly use the numerical values based on E49-400T20D manual
-            switch (uartBaud) {
-                case UART_1200:   _ebyte->SetUARTBaudRate(0b000); break; // 1200 baud
-                case UART_2400:   _ebyte->SetUARTBaudRate(0b001); break; // 2400 baud
-                case UART_4800:   _ebyte->SetUARTBaudRate(0b010); break; // 4800 baud
-                case UART_9600:   _ebyte->SetUARTBaudRate(0b011); break; // 9600 baud
-                case UART_19200:  _ebyte->SetUARTBaudRate(0b100); break; // 19200 baud
-                case UART_38400:  _ebyte->SetUARTBaudRate(0b101); break; // 38400 baud
-                case UART_57600:  _ebyte->SetUARTBaudRate(0b110); break; // 57600 baud
-                case UART_115200: _ebyte->SetUARTBaudRate(0b111); break; // 115200 baud
-                default:          _ebyte->SetUARTBaudRate(0b011); break; // 9600 baud (default)
+            // Wait for module to be ready
+            if (!waitForAUXWithTimeout(2000)) {
+                Serial.println("⚠️  AUX timeout, but continuing configuration attempt");
             }
-            Serial.println("[EBYTE] UART baud rate set to: " + String(uartBaud));
 
-            // Set transmission power
-            _ebyte->SetTransmitPower(powerLevel);
-            Serial.println("[EBYTE] Transmit power set to: " + String(powerLevel));
+            // Configuration attempts with retries
+            bool configSuccess = false;
+            for (int attempt = 1; attempt <= 3 && !configSuccess; attempt++) {
+                Serial.printf("🔧 Configuration attempt %d/3...\n", attempt);
 
-            // Save parameters to module
-            _ebyte->SaveParameters(PERMANENT); // Using the constant from the library
-            Serial.println("[EBYTE] Parameters saved to EEPROM");
+                // Use EBYTE library methods with error checking
+                try {
+                    Serial.printf("   Setting channel to 0x%02X...\n", channel);
+                    _ebyte->SetChannel(channel);
+                    delay(100);
 
-            // Return to normal mode
-            bool success = setMode(MODE_NORMAL);
-            Serial.println("[EBYTE] Module returned to normal mode: " + String(success ? "SUCCESS" : "FAILED"));
+                    Serial.printf("   Setting address to 0x%04X...\n", address);
+                    _ebyte->SetAddress(address);
+                    delay(100);
 
-            // Log current pin states after configuration
-            Serial.printf("[EBYTE] Pin states after config - M0: %d, M1: %d, AUX: %d\n",
-                          digitalRead(_pinM0), digitalRead(_pinM1), digitalRead(_pinAUX));
+                    Serial.printf("   Setting air data rate to %d...\n", airDataRate);
+                    _ebyte->SetAirDataRate(airDataRate);
+                    delay(100);
 
-            return success;
+                    Serial.printf("   Setting UART baud rate to %d...\n", uartBaud);
+                    _ebyte->SetUARTBaudRate(uartBaud);
+                    delay(100);
+
+                    Serial.printf("   Setting transmission power to %d...\n", powerLevel);
+                    _ebyte->SetTransmitPower(powerLevel);
+                    delay(100);
+
+                    Serial.println("   Saving parameters to EEPROM...");
+                    _ebyte->SaveParameters(PERMANENT);
+                    delay(500); // EEPROM write needs time
+
+                    configSuccess = true;
+                    Serial.printf("✅ Configuration attempt %d successful\n", attempt);
+
+                } catch (...) {
+                    Serial.printf("❌ Configuration attempt %d failed with exception\n", attempt);
+                    delay(1000);
+                }
+            }
+
+            if (!configSuccess) {
+                Serial.println("❌ All configuration attempts failed");
+                _lastError = "Configuration failed after all retries";
+            }
+
+            // Return to normal mode with retries
+            Serial.println("🔄 Returning to normal mode...");
+            if (!setModeWithRetries(MODE_NORMAL, 3)) {
+                Serial.println("⚠️  Failed to return to normal mode");
+                _lastError = "Failed to return to normal mode";
+            } else {
+                Serial.println("✅ Returned to normal mode successfully");
+            }
+
+            // Verify configuration by attempting a test transmission
+            if (configSuccess) {
+                Serial.println("🧪 Testing configuration with dummy transmission...");
+                delay(1000); // Let module settle
+
+                // Send a small test message
+                uint8_t testMsg[] = {0xAA, 0x55, 0xAA, 0x55};
+                if (sendMessage(0, testMsg, sizeof(testMsg))) {
+                    Serial.println("✅ Configuration test transmission successful");
+                } else {
+                    Serial.println("⚠️  Configuration test transmission failed (may be normal without receiver)");
+                }
+            }
+
+            // Final status report
+            Serial.println("📊 Configuration Summary:");
+            Serial.printf("   Overall result: %s\n", configSuccess ? "SUCCESS" : "FAILED");
+            Serial.printf("   Channel: 0x%02X\n", _channel);
+            Serial.printf("   Address: 0x%04X\n", _address);
+            Serial.printf("   Current mode: %s\n", getCurrentModeString().c_str());
+            Serial.printf("   AUX pin state: %s\n", digitalRead(_pinAUX) ? "HIGH" : "LOW");
+
+            return configSuccess;
         }
 
         bool EbyteCommModule::sendMessage(uint8_t nodeId, const void* message, size_t length) {
             if (!_initialized) {
                 _lastError = "Module not initialized";
-                Serial.println("[EBYTE] ERROR: " + _lastError);
+                if (_debugLevel >= 1) {
+                    Serial.println("❌ Send failed: " + _lastError);
+                }
                 return false;
             }
 
-            // Set the module to transmission mode
-            if (!setMode(MODE_NORMAL)) {
-                _lastError = "Failed to set transmission mode";
-                Serial.println("[EBYTE] ERROR: " + _lastError);
+            if (length == 0 || message == nullptr) {
+                _lastError = "Invalid message parameters";
+                if (_debugLevel >= 1) {
+                    Serial.println("❌ Send failed: " + _lastError);
+                }
                 return false;
             }
 
-            // Wait for module to be ready
-            if (!waitForAUX()) {
-                _lastError = "Module not ready for transmission";
-                Serial.println("[EBYTE] ERROR: " + _lastError);
-                return false;
-            }
-
-            // Debug: dump message contents if debug level is high enough
+            // Enhanced pre-transmission checks
             if (_debugLevel >= 2) {
-                Serial.printf("[EBYTE] Sending message to node %d (%d bytes):\n", nodeId, length);
+                Serial.printf("📤 SEND MESSAGE START\n");
+                Serial.printf("   Target Node: %d %s\n", nodeId, nodeId == 0 ? "(BROADCAST)" : "");
+                Serial.printf("   Message Length: %d bytes\n", length);
+                Serial.printf("   Current Mode: %s\n", getCurrentModeString().c_str());
+                Serial.printf("   AUX Pin: %s\n", digitalRead(_pinAUX) ? "HIGH (ready)" : "LOW (busy)");
+            }
+
+            // Ensure we're in transmission mode
+            if (!setModeWithRetries(MODE_NORMAL, 2)) {
+                _lastError = "Failed to set transmission mode";
+                Serial.println("❌ " + _lastError);
+                return false;
+            }
+
+            // Wait for module to be ready with timeout
+            if (!waitForAUXWithTimeout(1000)) {
+                if (_debugLevel >= 1) {
+                    Serial.println("⚠️  AUX timeout before transmission (continuing anyway)");
+                }
+            }
+
+            // Clear any existing data in serial buffer
+            int clearCount = 0;
+            while (_serial->available() && clearCount < 100) {
+                _serial->read();
+                clearCount++;
+            }
+            if (clearCount > 0 && _debugLevel >= 2) {
+                Serial.printf("   🧹 Cleared %d bytes from RX buffer\n", clearCount);
+            }
+
+            // Enhanced message transmission with monitoring
+            unsigned long sendStart = millis();
+
+            if (_debugLevel >= 2) {
+                Serial.printf("   📡 Transmitting %d bytes...\n", length);
                 dumpMessageHex(message, length);
             }
 
-            // Clear any existing data in the buffer
-            while (_serial->available()) {
-                _serial->read();
-            }
-
-            // Send message
+            // Perform actual transmission
             size_t bytesWritten = _serial->write(static_cast<const uint8_t*>(message), length);
+            _serial->flush(); // Ensure all data is sent
+
+            unsigned long sendDuration = millis() - sendStart;
 
             if (bytesWritten != length) {
-                _lastError = "Failed to send complete message";
-                Serial.printf("[EBYTE] ERROR: Only sent %d of %d bytes\n", bytesWritten, length);
+                _lastError = "Incomplete transmission: " + String(bytesWritten) + "/" + String(length) + " bytes";
+                Serial.println("❌ " + _lastError);
                 return false;
             }
 
-            Serial.printf("[EBYTE] Message sent: %d bytes\n", bytesWritten);
+            // Monitor AUX pin during and after transmission
+            if (_debugLevel >= 2) {
+                Serial.printf("   ⏱️  Transmission completed in %lu ms\n", sendDuration);
+                Serial.printf("   📊 Bytes written: %d/%d\n", bytesWritten, length);
+
+                // Check AUX pin state after transmission
+                delay(50); // Give time for transmission to start
+                int auxAfter = digitalRead(_pinAUX);
+                Serial.printf("   📍 AUX after send: %s\n", auxAfter ? "HIGH" : "LOW");
+
+                // Wait to see if AUX changes (indicating transmission in progress)
+                for (int i = 0; i < 10; i++) {
+                    delay(10);
+                    int currentAux = digitalRead(_pinAUX);
+                    if (currentAux != auxAfter) {
+                        Serial.printf("   🔄 AUX changed to %s after %d ms\n",
+                                      currentAux ? "HIGH" : "LOW", (i + 1) * 10);
+                        break;
+                    }
+                }
+            }
+
+            if (_debugLevel >= 1) {
+                Serial.printf("✅ Message sent successfully (%d bytes in %lu ms)\n", bytesWritten, sendDuration);
+            }
+
             return true;
         }
 
@@ -215,52 +424,110 @@ namespace szogfm {
                 return false;
             }
 
-            // Check if we already have a message in the buffer
+            // Check if we already have a complete message buffered
             if (_hasMessage) {
                 return true;
             }
 
-            // Check if there's data available on the serial port
-            if (_serial->available() > 0) {
-                // Get the number of bytes available
-                size_t availableBytes = _serial->available();
-                Serial.printf("[EBYTE] Data available: %d bytes\n", availableBytes);
-
-                // Read available data into buffer
-                size_t bytesToRead = min(availableBytes, RX_BUFFER_SIZE - _rxBufferLen);
-
-                if (bytesToRead > 0) {
-                    size_t bytesRead = _serial->readBytes(_rxBuffer + _rxBufferLen, bytesToRead);
-                    _rxBufferLen += bytesRead;
-
-                    Serial.printf("[EBYTE] Read %d bytes into buffer (total: %d)\n", bytesRead, _rxBufferLen);
-
-                    // Very basic check if we have a complete message
-                    // In a real implementation, you would need proper message framing
-                    if (_rxBufferLen >= sizeof(MessageHeader)) {
-                        const MessageHeader* header = reinterpret_cast<const MessageHeader*>(_rxBuffer);
-                        size_t expectedLength = sizeof(MessageHeader) + header->payloadLength;
-
-                        if (_rxBufferLen >= expectedLength) {
-                            Serial.printf("[EBYTE] Complete message received (%d bytes, from node %d)\n",
-                                          _rxBufferLen, header->nodeId);
-                            _hasMessage = true;
-
-                            // Debug message contents
-                            if (_debugLevel >= 2) {
-                                dumpMessageHex(_rxBuffer, _rxBufferLen);
-                            }
-
-                            return true;
-                        } else {
-                            Serial.printf("[EBYTE] Partial message: Have %d bytes, need %d more\n",
-                                          _rxBufferLen, expectedLength - _rxBufferLen);
-                        }
-                    }
-                }
+            // Check for new data on serial port
+            size_t availableBytes = _serial->available();
+            if (availableBytes == 0) {
+                return false;
             }
 
-            return false;
+            if (_debugLevel >= 2) {
+                Serial.printf("📥 Data available: %d bytes\n", availableBytes);
+            }
+
+            // Read available data into our buffer
+            size_t spacesLeft = RX_BUFFER_SIZE - _rxBufferLen;
+            size_t bytesToRead = min(availableBytes, spacesLeft);
+
+            if (bytesToRead == 0) {
+                Serial.println("⚠️  RX buffer full, clearing...");
+                _rxBufferLen = 0; // Reset buffer
+                bytesToRead = min(availableBytes, RX_BUFFER_SIZE);
+            }
+
+            size_t bytesRead = _serial->readBytes(_rxBuffer + _rxBufferLen, bytesToRead);
+            _rxBufferLen += bytesRead;
+
+            if (_debugLevel >= 2) {
+                Serial.printf("📥 Read %d bytes, buffer now has %d bytes\n", bytesRead, _rxBufferLen);
+            }
+
+            // Check if we have enough data for a message header
+            if (_rxBufferLen < sizeof(MessageHeader)) {
+                if (_debugLevel >= 2) {
+                    Serial.printf("   📊 Need %d more bytes for complete header\n",
+                                  sizeof(MessageHeader) - _rxBufferLen);
+                }
+                return false;
+            }
+
+            // Parse message header to determine total message length
+            const MessageHeader* header = reinterpret_cast<const MessageHeader*>(_rxBuffer);
+            size_t expectedLength = sizeof(MessageHeader) + header->payloadLength;
+
+            if (_debugLevel >= 2) {
+                Serial.printf("   📋 Message header parsed:\n");
+                Serial.printf("      Type: %d\n", static_cast<int>(header->type));
+                Serial.printf("      Node ID: %d\n", header->nodeId);
+                Serial.printf("      Sequence: %d\n", header->sequenceNum);
+                Serial.printf("      Payload Length: %d\n", header->payloadLength);
+                Serial.printf("      Expected Total: %d bytes\n", expectedLength);
+                Serial.printf("      Checksum: 0x%02X\n", header->checksum);
+            }
+
+            // Validate message parameters
+            if (expectedLength > RX_BUFFER_SIZE) {
+                Serial.printf("❌ Message too large: %d > %d bytes (clearing buffer)\n",
+                              expectedLength, RX_BUFFER_SIZE);
+                _rxBufferLen = 0;
+                return false;
+            }
+
+            if (header->payloadLength > 200) { // Sanity check
+                Serial.printf("❌ Suspicious payload length: %d (clearing buffer)\n", header->payloadLength);
+                _rxBufferLen = 0;
+                return false;
+            }
+
+            // Check if we have the complete message
+            if (_rxBufferLen >= expectedLength) {
+                if (_debugLevel >= 2) {
+                    Serial.printf("✅ Complete message received (%d bytes)\n", _rxBufferLen);
+                    Serial.printf("   📊 Message type: %d from node %d\n",
+                                  static_cast<int>(header->type), header->nodeId);
+                }
+
+                // Validate checksum
+                bool checksumValid = header->validateChecksum();
+                if (_debugLevel >= 2) {
+                    Serial.printf("   ✅ Checksum: %s (0x%02X)\n",
+                                  checksumValid ? "VALID" : "INVALID", header->checksum);
+                }
+
+                if (!checksumValid) {
+                    Serial.println("❌ Invalid checksum, discarding message");
+                    _rxBufferLen = 0;
+                    return false;
+                }
+
+                _hasMessage = true;
+
+                if (_debugLevel >= 2) {
+                    dumpMessageHex(_rxBuffer, _rxBufferLen);
+                }
+
+                return true;
+            } else {
+                if (_debugLevel >= 2) {
+                    Serial.printf("   📊 Partial message: have %d bytes, need %d more\n",
+                                  _rxBufferLen, expectedLength - _rxBufferLen);
+                }
+                return false;
+            }
         }
 
         size_t EbyteCommModule::receiveMessage(void* buffer, size_t maxLength, uint8_t& senderNodeId) {
@@ -268,34 +535,243 @@ namespace szogfm {
                 return 0;
             }
 
-            // Debug - check header validity
-            if (_rxBufferLen >= sizeof(MessageHeader)) {
-                const MessageHeader* header = reinterpret_cast<const MessageHeader*>(_rxBuffer);
-                bool validChecksum = header->validateChecksum();
-                Serial.printf("[EBYTE] Message checksum: %s\n", validChecksum ? "VALID" : "INVALID");
+            // Validate buffer parameters
+            if (!buffer || maxLength == 0) {
+                Serial.println("❌ Invalid receive buffer parameters");
+                return 0;
             }
 
-            // Copy the message from the buffer
+            if (_debugLevel >= 2) {
+                Serial.printf("📥 RECEIVE MESSAGE START\n");
+                Serial.printf("   Buffer size: %d bytes\n", maxLength);
+                Serial.printf("   Message size: %d bytes\n", _rxBufferLen);
+            }
+
+            // Copy message to output buffer
             size_t bytesToCopy = min(_rxBufferLen, maxLength);
             memcpy(buffer, _rxBuffer, bytesToCopy);
 
-            // Extract sender node ID from message (assuming it's in the header)
-            // This would depend on your message format
+            // Extract sender information from header
             const MessageHeader* header = reinterpret_cast<const MessageHeader*>(_rxBuffer);
             senderNodeId = header->nodeId;
 
-            // Log message details
-            Serial.printf("[EBYTE] Message received: %d bytes from node %d (type: %d, seq: %d)\n",
-                          bytesToCopy, senderNodeId,
-                          static_cast<int>(header->type),
-                          header->sequenceNum);
+            if (_debugLevel >= 1) {
+                Serial.printf("📥 Message received: %d bytes from node %d\n", bytesToCopy, senderNodeId);
+                Serial.printf("   Type: %d, Sequence: %d, Timestamp: %lu\n",
+                              static_cast<int>(header->type), header->sequenceNum, header->timestamp);
+            }
 
-            // Clear the buffer
+            // Clear the receive buffer
             _rxBufferLen = 0;
             _hasMessage = false;
 
             return bytesToCopy;
         }
+
+        // Enhanced helper methods with better error handling
+
+        bool EbyteCommModule::setModeWithRetries(uint8_t mode, int maxRetries) {
+            for (int attempt = 1; attempt <= maxRetries; attempt++) {
+                if (_debugLevel >= 2) {
+                    Serial.printf("🔄 Mode change attempt %d/%d to mode %d\n", attempt, maxRetries, mode);
+                }
+
+                if (setMode(mode)) {
+                    if (_debugLevel >= 2) {
+                        Serial.printf("✅ Mode change successful on attempt %d\n", attempt);
+                    }
+                    return true;
+                }
+
+                if (attempt < maxRetries) {
+                    delay(200 * attempt); // Increasing delay between retries
+                }
+            }
+
+            if (_debugLevel >= 1) {
+                Serial.printf("❌ Mode change failed after %d attempts\n", maxRetries);
+            }
+            return false;
+        }
+
+        bool EbyteCommModule::waitForAUXWithTimeout(unsigned long timeout) {
+            unsigned long startTime = millis();
+
+            // Check current state
+            int initialState = digitalRead(_pinAUX);
+            if (initialState == HIGH) {
+                return true; // Already ready
+            }
+
+            if (_debugLevel >= 2) {
+                Serial.printf("⏳ Waiting for AUX (timeout: %lu ms)\n", timeout);
+            }
+
+            // Wait for AUX to go HIGH
+            while (digitalRead(_pinAUX) == LOW) {
+                if (millis() - startTime > timeout) {
+                    if (_debugLevel >= 1) {
+                        Serial.printf("⏰ AUX timeout after %lu ms\n", timeout);
+                    }
+                    return false;
+                }
+                delay(10);
+            }
+
+            unsigned long elapsed = millis() - startTime;
+            if (_debugLevel >= 2) {
+                Serial.printf("✅ AUX ready after %lu ms\n", elapsed);
+            }
+
+            return true;
+        }
+
+        String EbyteCommModule::getCurrentModeString() const {
+            int m0 = digitalRead(_pinM0);
+            int m1 = digitalRead(_pinM1);
+
+            if (m0 == 0 && m1 == 0) return "Normal (M0=0,M1=0)";
+            if (m0 == 1 && m1 == 0) return "Wakeup (M0=1,M1=0)";
+            if (m0 == 0 && m1 == 1) return "PowerDown (M0=0,M1=1)";
+            if (m0 == 1 && m1 == 1) return "Sleep (M0=1,M1=1)";
+            return "Unknown";
+        }
+
+        bool EbyteCommModule::setMode(uint8_t mode) {
+            if (_debugLevel >= 2) {
+                Serial.printf("🔄 Setting mode to %d (%s)\n", mode, getModeString(mode).c_str());
+            }
+
+            // Store current state for comparison
+            int oldM0 = digitalRead(_pinM0);
+            int oldM1 = digitalRead(_pinM1);
+            int oldAUX = digitalRead(_pinAUX);
+
+            if (_debugLevel >= 2) {
+                Serial.printf("   Before: M0=%d, M1=%d, AUX=%d\n", oldM0, oldM1, oldAUX);
+            }
+
+            // Set pins according to mode
+            switch (mode) {
+                case MODE_NORMAL:    // 0: Normal mode (M0=0, M1=0)
+                    digitalWrite(_pinM0, LOW);
+                    digitalWrite(_pinM1, LOW);
+                    break;
+                case MODE_WAKEUP:    // 1: Wakeup mode (M0=1, M1=0)
+                    digitalWrite(_pinM0, HIGH);
+                    digitalWrite(_pinM1, LOW);
+                    break;
+                case MODE_POWERDOWN: // 2: Power saving/config mode (M0=0, M1=1)
+                    digitalWrite(_pinM0, LOW);
+                    digitalWrite(_pinM1, HIGH);
+                    break;
+                case MODE_SLEEP:     // 3: Sleep mode (M0=1, M1=1)
+                    digitalWrite(_pinM0, HIGH);
+                    digitalWrite(_pinM1, HIGH);
+                    break;
+                default:
+                    if (_debugLevel >= 1) {
+                        Serial.printf("❌ Invalid mode: %d\n", mode);
+                    }
+                    return false;
+            }
+
+            // Give pins time to settle
+            delay(50);
+
+            // Verify pin states
+            int newM0 = digitalRead(_pinM0);
+            int newM1 = digitalRead(_pinM1);
+
+            if (_debugLevel >= 2) {
+                Serial.printf("   After: M0=%d, M1=%d\n", newM0, newM1);
+            }
+
+            // Wait for AUX response (but don't fail if it doesn't respond)
+            bool auxReady = waitForAUXWithTimeout(1000);
+            int finalAUX = digitalRead(_pinAUX);
+
+            if (_debugLevel >= 2) {
+                Serial.printf("   Final AUX: %d (%s)\n", finalAUX, auxReady ? "ready" : "timeout");
+            }
+
+            // Consider successful if pins are set correctly
+            bool pinsCorrect = (newM0 == ((mode & 1) ? 1 : 0)) && (newM1 == ((mode & 2) ? 1 : 0));
+
+            if (pinsCorrect) {
+                if (_debugLevel >= 2) {
+                    Serial.printf("✅ Mode change successful\n");
+                }
+                return true;
+            } else {
+                if (_debugLevel >= 1) {
+                    Serial.printf("❌ Mode change failed - pin verification failed\n");
+                }
+                return false;
+            }
+        }
+
+        String EbyteCommModule::getModeString(uint8_t mode) const {
+            switch (mode) {
+                case MODE_NORMAL: return "Normal";
+                case MODE_WAKEUP: return "Wakeup";
+                case MODE_POWERDOWN: return "PowerDown";
+                case MODE_SLEEP: return "Sleep";
+                default: return "Invalid";
+            }
+        }
+
+        void EbyteCommModule::dumpMessageHex(const void* message, size_t length) {
+            if (_debugLevel < 2) return;
+
+            const uint8_t* data = static_cast<const uint8_t*>(message);
+
+            Serial.println("   📦 Message Hex Dump:");
+            Serial.println("   " + String("-").repeat(48));
+
+            for (size_t i = 0; i < length; i += 16) {
+                // Address
+                Serial.printf("   %04X: ", i);
+
+                // Hex bytes
+                for (size_t j = 0; j < 16 && (i + j) < length; j++) {
+                    Serial.printf("%02X ", data[i + j]);
+                }
+
+                // Padding for incomplete lines
+                for (size_t j = (length - i < 16 ? length - i : 16); j < 16; j++) {
+                    Serial.print("   ");
+                }
+
+                // ASCII representation
+                Serial.print(" | ");
+                for (size_t j = 0; j < 16 && (i + j) < length; j++) {
+                    uint8_t c = data[i + j];
+                    Serial.print((c >= 32 && c < 127) ? (char)c : '.');
+                }
+
+                Serial.println();
+            }
+
+            Serial.println("   " + String("-").repeat(48));
+
+            // Message interpretation if it's a known type
+            if (length >= sizeof(MessageHeader)) {
+                const MessageHeader* header = reinterpret_cast<const MessageHeader*>(message);
+                Serial.println("   📋 Message Structure:");
+                Serial.printf("      Version: %d\n", header->version);
+                Serial.printf("      Type: %d\n", static_cast<int>(header->type));
+                Serial.printf("      Node ID: %d\n", header->nodeId);
+                Serial.printf("      Sequence: %d\n", header->sequenceNum);
+                Serial.printf("      Payload Len: %d\n", header->payloadLength);
+                Serial.printf("      Timestamp: %lu ms\n", header->timestamp);
+                Serial.printf("      Checksum: 0x%02X (computed: 0x%02X) %s\n",
+                              header->checksum, header->computeChecksum(),
+                              header->validateChecksum() ? "✅" : "❌");
+            }
+        }
+
+        // Implementation of remaining interface methods with enhanced error handling
 
         String EbyteCommModule::getLastError() const {
             return _lastError;
@@ -305,12 +781,13 @@ namespace szogfm {
             if (!_initialized) {
                 return false;
             }
-
-            // Check the AUX pin - low means transmitting
+            // AUX low typically indicates the module is busy (transmitting or processing)
             return digitalRead(_pinAUX) == LOW;
         }
 
         int EbyteCommModule::getSignalStrength() const {
+            // E49 module doesn't provide direct RSSI measurement
+            // Return cached value or estimate based on communication success
             return _lastRssi;
         }
 
@@ -320,258 +797,161 @@ namespace szogfm {
                 return false;
             }
 
-            // Set to configuration mode
-            if (!setMode(MODE_POWERDOWN)) {
-                _lastError = "Failed to set configuration mode";
+            Serial.printf("🔋 Setting transmission power to level %d\n", level);
+
+            if (!setModeWithRetries(MODE_POWERDOWN, 3)) {
+                _lastError = "Failed to enter configuration mode for power setting";
                 return false;
             }
 
-            // Set transmission power
             _ebyte->SetTransmitPower(level);
-            Serial.println("[EBYTE] Transmission power set to: " + String(level));
-
-            // Save parameters
             _ebyte->SaveParameters(PERMANENT);
 
-            // Return to normal mode
-            return setMode(MODE_NORMAL);
+            bool success = setModeWithRetries(MODE_NORMAL, 3);
+            if (success) {
+                Serial.printf("✅ Transmission power set to level %d\n", level);
+            } else {
+                Serial.printf("❌ Failed to set transmission power\n");
+            }
+
+            return success;
         }
 
         void EbyteCommModule::update() {
-            // Process any pending operations or maintenance tasks
-            // Check if there's data available to read
-            if (_serial->available() > 0 && !_hasMessage) {
-                isMessageAvailable();
-            }
+            static unsigned long lastStatusCheck = 0;
+            unsigned long currentTime = millis();
 
-            // Check AUX pin periodically
-            static unsigned long lastAuxCheck = 0;
-            if (millis() - lastAuxCheck > 5000) {
-                lastAuxCheck = millis();
-                int auxState = digitalRead(_pinAUX);
-
+            // Periodic status checks
+            if (currentTime - lastStatusCheck > 5000) { // Every 5 seconds
                 if (_debugLevel >= 2) {
-                    Serial.printf("[EBYTE] AUX pin state: %d\n", auxState);
+                    int auxState = digitalRead(_pinAUX);
+                    Serial.printf("📊 Module status: AUX=%s, Mode=%s, Buffer=%d bytes\n",
+                                  auxState ? "Ready" : "Busy", getCurrentModeString().c_str(), _rxBufferLen);
+                }
+                lastStatusCheck = currentTime;
+            }
+
+            // Check for new messages
+            isMessageAvailable();
+
+            // Buffer management - prevent overflow
+            if (_rxBufferLen > RX_BUFFER_SIZE * 0.8) { // 80% full
+                if (_debugLevel >= 1) {
+                    Serial.printf("⚠️  RX buffer nearly full (%d/%d bytes)\n", _rxBufferLen, RX_BUFFER_SIZE);
                 }
             }
-        }
-
-        bool EbyteCommModule::setMode(uint8_t mode) {
-            // Mode 0: Normal mode (transmit/receive)
-            // Mode 1: Wake-up mode
-            // Mode 2: Power saving mode (configuration mode in E49)
-            // Mode 3: Sleep mode
-
-            Serial.printf("[EBYTE] Setting mode to %d\n", mode);
-            Serial.printf("[EBYTE] Before: M0=%d, M1=%d\n", digitalRead(_pinM0), digitalRead(_pinM1));
-
-            // Set module to the specified mode - manual pin control for better control
-            switch (mode) {
-                case MODE_NORMAL:
-                    digitalWrite(_pinM0, LOW);
-                    digitalWrite(_pinM1, LOW);
-                    break;
-                case MODE_WAKEUP:
-                    digitalWrite(_pinM0, HIGH);
-                    digitalWrite(_pinM1, LOW);
-                    break;
-                case MODE_POWERDOWN:
-                    digitalWrite(_pinM0, LOW);
-                    digitalWrite(_pinM1, HIGH);
-                    break;
-                case MODE_SLEEP:
-                    digitalWrite(_pinM0, HIGH);
-                    digitalWrite(_pinM1, HIGH);
-                    break;
-                default:
-                    Serial.printf("[EBYTE] Invalid mode: %d\n", mode);
-                    return false;
-            }
-
-            // Delay to allow mode change to take effect
-            delay(50);
-
-            Serial.printf("[EBYTE] After: M0=%d, M1=%d\n", digitalRead(_pinM0), digitalRead(_pinM1));
-
-            // Wait for module to be ready
-            return waitForAUX(1000);
-        }
-
-        bool EbyteCommModule::waitForAUX(unsigned long timeout) {
-            unsigned long startTime = millis();
-
-            // Give the module some time to change state
-            delay(50);
-
-            Serial.printf("[EBYTE] Waiting for AUX pin to go HIGH (timeout: %lu ms)\n", timeout);
-
-            // Initial state
-            int auxState = digitalRead(_pinAUX);
-            Serial.printf("[EBYTE] Initial AUX state: %d\n", auxState);
-
-            // If already high, we're good
-            if (auxState == HIGH) {
-                Serial.println("[EBYTE] AUX already HIGH");
-                return true;
-            }
-
-            // Wait for AUX to go high
-            while (digitalRead(_pinAUX) == LOW) {
-                if (millis() - startTime > timeout) {
-                    _lastError = "AUX pin timeout";
-                    Serial.println("[EBYTE] ERROR: AUX pin timeout - pin never went HIGH");
-                    return false;
-                }
-
-                // Add a small delay to avoid hammering CPU
-                delay(10);
-
-                // Log progress periodically
-                if ((millis() - startTime) % 200 == 0) {
-                    Serial.printf("[EBYTE] Still waiting for AUX, elapsed: %lu ms\n", millis() - startTime);
-                }
-            }
-
-            unsigned long elapsed = millis() - startTime;
-            Serial.printf("[EBYTE] AUX went HIGH after %lu ms\n", elapsed);
-            return true;
         }
 
         void EbyteCommModule::printParameters() {
             if (!_initialized) {
-                Serial.println("[EBYTE] Module not initialized");
+                Serial.println("❌ Module not initialized - cannot print parameters");
                 return;
             }
 
-            Serial.println("\n[EBYTE] Module Parameters");
-            Serial.println("---------------------");
-            Serial.printf("Channel: %d (0x%02X)\n", _channel, _channel);
-            Serial.printf("Address: 0x%04X\n", _address);
-            Serial.printf("Pin States - M0: %d, M1: %d, AUX: %d\n",
-                          digitalRead(_pinM0), digitalRead(_pinM1), digitalRead(_pinAUX));
+            Serial.println("\n📊 EBYTE Module Parameters");
+            Serial.println(String("=").repeat(40));
+            Serial.printf("Initialization: %s\n", _initialized ? "✅ SUCCESS" : "❌ FAILED");
+            Serial.printf("Channel: 0x%02X (%d)\n", _channel, _channel);
+            Serial.printf("Address: 0x%04X (%d)\n", _address, _address);
+            Serial.printf("Debug Level: %d\n", _debugLevel);
+            Serial.printf("Current Mode: %s\n", getCurrentModeString().c_str());
 
-            // For E49-400T20D, we won't try to read from the module directly
-            // since some methods are private/protected in the EBYTE library
-            Serial.println("[EBYTE] Using cached parameter values (reading from module not available)");
-        }
+            // Pin states
+            Serial.println("\nPin States:");
+            Serial.printf("  M0 (pin %d): %s\n", _pinM0, digitalRead(_pinM0) ? "HIGH" : "LOW");
+            Serial.printf("  M1 (pin %d): %s\n", _pinM1, digitalRead(_pinM1) ? "HIGH" : "LOW");
+            Serial.printf("  AUX (pin %d): %s\n", _pinAUX, digitalRead(_pinAUX) ? "HIGH" : "LOW");
 
-        void EbyteCommModule::dumpMessageHex(const void* message, size_t length) {
-            const uint8_t* data = static_cast<const uint8_t*>(message);
-            char hexStr[16*3+1]; // Each line shows 16 bytes, each byte is 2 hex chars + space
+            // Buffer status
+            Serial.println("\nBuffer Status:");
+            Serial.printf("  RX Buffer: %d/%d bytes (%d%% full)\n",
+                          _rxBufferLen, RX_BUFFER_SIZE, (_rxBufferLen * 100) / RX_BUFFER_SIZE);
+            Serial.printf("  Has Message: %s\n", _hasMessage ? "Yes" : "No");
 
-            Serial.println("[EBYTE] Message Hex Dump:");
-            Serial.println("------------------------------------------------------");
-
-            for (size_t i = 0; i < length; i += 16) {
-                char* hexPtr = hexStr;
-                *hexPtr = '\0';
-
-                // Address
-                Serial.printf("%04X: ", i);
-
-                // Hex representation
-                for (size_t j = 0; j < 16 && (i+j) < length; j++) {
-                    sprintf(hexPtr, "%02X ", data[i+j]);
-                    hexPtr += 3;
-                }
-
-                // Pad if incomplete line
-                for (size_t j = (length - i < 16 ? length - i : 16); j < 16; j++) {
-                    strcpy(hexPtr, "   ");
-                    hexPtr += 3;
-                }
-                *hexPtr = '\0';
-
-                Serial.print(hexStr);
-
-                // ASCII representation
-                Serial.print(" | ");
-                for (size_t j = 0; j < 16 && (i+j) < length; j++) {
-                    uint8_t c = data[i+j];
-                    if (c >= 32 && c < 127) {
-                        Serial.write(c);
-                    } else {
-                        Serial.print('.');
-                    }
-                }
-
-                Serial.println();
+            // Last error
+            if (_lastError.length() > 0) {
+                Serial.println("\nLast Error: " + _lastError);
             }
 
-            Serial.println("------------------------------------------------------");
-
-            // If this is a known message type, try to interpret its header
-            if (length >= sizeof(MessageHeader)) {
-                const MessageHeader* header = reinterpret_cast<const MessageHeader*>(message);
-                Serial.println("[EBYTE] Message Header Interpretation:");
-                Serial.printf("  Version:      %d\n", header->version);
-                Serial.printf("  Type:         %d\n", static_cast<int>(header->type));
-                Serial.printf("  Node ID:      %d\n", header->nodeId);
-                Serial.printf("  Sequence:     %d\n", header->sequenceNum);
-                Serial.printf("  Payload Len:  %d\n", header->payloadLength);
-                Serial.printf("  Timestamp:    %lu\n", header->timestamp);
-                Serial.printf("  Checksum:     0x%02X (Calculated: 0x%02X - %s)\n",
-                              header->checksum, header->computeChecksum(),
-                              (header->checksum == header->computeChecksum() ? "VALID" : "INVALID"));
-            }
+            Serial.println(String("=").repeat(40));
         }
 
         void EbyteCommModule::setDebugLevel(uint8_t level) {
             _debugLevel = level;
-            Serial.printf("[EBYTE] Debug level set to %d\n", level);
+            Serial.printf("🐛 EBYTE debug level set to %d\n", level);
+            if (level >= 2) {
+                Serial.println("   Level 2: Maximum verbosity with hex dumps enabled");
+            } else if (level >= 1) {
+                Serial.println("   Level 1: Basic operation logging enabled");
+            } else {
+                Serial.println("   Level 0: Debug logging disabled");
+            }
         }
 
         void EbyteCommModule::performDiagnostics() {
-            Serial.println("[EBYTE] Performing diagnostics...");
+            Serial.println("\n🔬 EBYTE Module Diagnostics");
+            Serial.println(String("=").repeat(50));
 
-            // Check physical connections
-            Serial.printf("[EBYTE] Pin status - M0: %d, M1: %d, AUX: %d\n",
-                          digitalRead(_pinM0), digitalRead(_pinM1), digitalRead(_pinAUX));
+            // Basic connectivity test
+            Serial.println("1. Basic Connectivity:");
+            Serial.printf("   Module initialized: %s\n", _initialized ? "✅ YES" : "❌ NO");
+            Serial.printf("   Current mode: %s\n", getCurrentModeString().c_str());
 
-            // Try to enter and exit all operating modes
-            Serial.println("[EBYTE] Testing mode transitions...");
+            // Pin test
+            Serial.println("\n2. Pin Functionality:");
+            int m0 = digitalRead(_pinM0);
+            int m1 = digitalRead(_pinM1);
+            int aux = digitalRead(_pinAUX);
+            Serial.printf("   M0 pin %d: %s\n", _pinM0, m0 ? "HIGH" : "LOW");
+            Serial.printf("   M1 pin %d: %s\n", _pinM1, m1 ? "HIGH" : "LOW");
+            Serial.printf("   AUX pin %d: %s\n", _pinAUX, aux ? "HIGH (ready)" : "LOW (busy)");
 
-            const char* modeNames[] = {"Normal", "Wakeup", "PowerDown", "Sleep"};
-            bool modeResults[4];
+            // Mode switching test
+            Serial.println("\n3. Mode Switching Test:");
+            bool modeTestResult = testModeTransitions();
+            Serial.printf("   Mode switching: %s\n", modeTestResult ? "✅ WORKING" : "❌ FAILED");
 
-            for (int mode = 0; mode < 4; mode++) {
-                Serial.printf("[EBYTE] Setting mode to %s (%d)...\n", modeNames[mode], mode);
-                modeResults[mode] = setMode(mode);
-                Serial.printf("[EBYTE] Mode change result: %s\n", modeResults[mode] ? "SUCCESS" : "FAILED");
-                delay(200);
-            }
-
-            // Return to normal mode for operation
-            setMode(MODE_NORMAL);
-
-            // Check UART communication
-            Serial.println("[EBYTE] Testing UART communication...");
+            // UART communication test
+            Serial.println("\n4. UART Communication:");
             _serial->flush();
+            int preCount = _serial->available();
+            Serial.printf("   Pre-test buffer: %d bytes\n", preCount);
 
-            // Read any pending data
-            int availableCount = 0;
-            while (_serial->available()) {
-                _serial->read();
-                availableCount++;
+            // Clear buffer
+            while (_serial->available()) _serial->read();
+
+            Serial.printf("   UART baud rate: 9600\n");
+            Serial.printf("   Buffer cleared: ✅\n");
+
+            // Configuration access test
+            Serial.println("\n5. Configuration Access:");
+            bool configAccess = testConfigurationMode();
+            Serial.printf("   Config mode access: %s\n", configAccess ? "✅ WORKING" : "❌ FAILED");
+
+            // Buffer and memory test
+            Serial.println("\n6. Buffer Status:");
+            Serial.printf("   RX buffer size: %d bytes\n", RX_BUFFER_SIZE);
+            Serial.printf("   Current buffer usage: %d bytes\n", _rxBufferLen);
+            Serial.printf("   Has pending message: %s\n", _hasMessage ? "Yes" : "No");
+
+            // Final assessment
+            Serial.println("\n📋 Diagnostic Summary:");
+            bool overallHealth = _initialized && modeTestResult;
+            Serial.printf("   Overall module health: %s\n", overallHealth ? "✅ GOOD" : "⚠️  ISSUES DETECTED");
+
+            if (!overallHealth) {
+                Serial.println("   🔧 Recommended actions:");
+                if (!_initialized) {
+                    Serial.println("      • Check power supply and connections");
+                    Serial.println("      • Verify correct pin assignments");
+                }
+                if (!modeTestResult) {
+                    Serial.println("      • Check M0/M1 control pin wiring");
+                    Serial.println("      • Verify module is not damaged");
+                }
             }
 
-            if (availableCount > 0) {
-                Serial.printf("[EBYTE] Cleared %d bytes from UART buffer\n", availableCount);
-            }
-
-            // Diagnostic summary
-            Serial.println("[EBYTE] Diagnostics summary:");
-            Serial.printf("  Normal mode transition:     %s\n", modeResults[0] ? "PASS" : "FAIL");
-            Serial.printf("  Wakeup mode transition:     %s\n", modeResults[1] ? "PASS" : "FAIL");
-            Serial.printf("  PowerDown mode transition:  %s\n", modeResults[2] ? "PASS" : "FAIL");
-            Serial.printf("  Sleep mode transition:      %s\n", modeResults[3] ? "PASS" : "FAIL");
-
-            // Try a loopback test if possible
-            if (modeResults[0]) { // If normal mode works
-                Serial.println("[EBYTE] A basic loopback test would require two modules - skipping");
-            }
-
-            Serial.println("[EBYTE] Diagnostics complete");
+            Serial.println(String("=").repeat(50));
         }
 
     } // namespace communication

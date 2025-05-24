@@ -5,11 +5,49 @@
 #include "../common/NodeConfig.h"
 #include "../common/communication/EbyteCommModule.h"
 #include "../common/radio/RDA5807Radio.h"
-#include "../common/display/SSD1306Display.h"  // Changed from ST7789Display to SSD1306Display
+#include "../common/display/SSD1306Display.h"
 #include "../common/input/ButtonHandler.h"
 
 namespace szogfm {
     namespace node {
+
+/**
+ * Structure to hold node statistics for debugging
+ */
+        struct NodeStatistics {
+            unsigned long bootTime;
+            unsigned long totalCommandsReceived;
+            unsigned long successfulCommands;
+            unsigned long failedCommands;
+            unsigned long totalStatusRequests;
+            unsigned long totalButtonPresses;
+            unsigned long totalDisplayUpdates;
+            unsigned long lastRadioUpdate;
+            unsigned long lastCommTest;
+            float commandSuccessRate;
+
+            // Radio statistics
+            struct {
+                unsigned long frequencyChanges;
+                unsigned long volumeChanges;
+                unsigned long muteToggles;
+                int lastRssi;
+                bool lastStereoState;
+                unsigned long lastFrequencyChange;
+                unsigned long lastVolumeChange;
+            } radio;
+
+            // Communication statistics
+            struct {
+                unsigned long messagesReceived;
+                unsigned long messagesSent;
+                unsigned long acksSent;
+                unsigned long communicationErrors;
+                unsigned long lastMessageReceived;
+                unsigned long lastMessageSent;
+                int lastSignalStrength;
+            } communication;
+        };
 
 /**
  * Node application class for SzogFM project
@@ -60,12 +98,42 @@ namespace szogfm {
              */
             void handleError(const String& message);
 
+            /**
+             * Get node statistics for debugging
+             * @return Node statistics structure
+             */
+            const NodeStatistics& getStatistics() const { return _stats; }
+
+            /**
+             * Enable or disable verbose debugging
+             * @param enable true to enable verbose debugging
+             */
+            void setVerboseDebugging(bool enable) { _verboseDebugging = enable; }
+
+            /**
+             * Perform a comprehensive self-test
+             * @return true if all tests pass, false otherwise
+             */
+            bool performSelfTest();
+
+            /**
+             * Get detailed system status for debugging
+             * @return JSON string with detailed status
+             */
+            String getDetailedSystemStatus() const;
+
+            /**
+             * Test all hardware components
+             * @return true if all components are working
+             */
+            bool testHardwareComponents();
+
         private:
             // Components
             NodeConfig _config;
             communication::EbyteCommModule* _commModule;
             radio::RDA5807Radio* _radio;
-            display::SSD1306Display* _display;  // Changed from ST7789Display to SSD1306Display
+            display::SSD1306Display* _display;
             input::ButtonHandler* _buttonHandler;
 
             // State variables
@@ -75,11 +143,16 @@ namespace szogfm {
             unsigned long _lastDisplayUpdateTime;
             unsigned long _lastHeartbeatTime;
             unsigned long _lastReceivedMessageTime;
+            unsigned long _lastSelfTestTime;
             int _connectionSignalStrength;
             uint16_t _messageSequence;
             bool _hasSensors;
             float _temperature;
             float _humidity;
+            bool _verboseDebugging;
+
+            // Statistics
+            NodeStatistics _stats;
 
             // Pin definitions (can be adjusted in constructor)
             int _pinRelayControl;
@@ -95,6 +168,7 @@ namespace szogfm {
             static constexpr unsigned long DISPLAY_UPDATE_INTERVAL = 250; // 250 ms
             static constexpr unsigned long HEARTBEAT_INTERVAL = 30000;    // 30 seconds
             static constexpr unsigned long CONNECTION_TIMEOUT = 60000;    // 60 seconds
+            static constexpr unsigned long SELF_TEST_INTERVAL = 300000;   // 5 minutes
 
             /**
              * Set up button callbacks
@@ -145,28 +219,28 @@ namespace szogfm {
             bool sendHeartbeat();
 
             /**
-             * Process a SET_VOLUME command
+             * Process a SET_VOLUME command with detailed logging
              * @param volume New volume value
              * @return true if the command was processed successfully, false otherwise
              */
             bool processSetVolumeCommand(uint8_t volume);
 
             /**
-             * Process a SET_FREQUENCY command
+             * Process a SET_FREQUENCY command with detailed logging
              * @param frequency New frequency value
              * @return true if the command was processed successfully, false otherwise
              */
             bool processSetFrequencyCommand(uint16_t frequency);
 
             /**
-             * Process a TOGGLE_RELAY command
+             * Process a TOGGLE_RELAY command with detailed logging
              * @param state New relay state
              * @return true if the command was processed successfully, false otherwise
              */
             bool processToggleRelayCommand(bool state);
 
             /**
-             * Process a MUTE command
+             * Process a MUTE command with detailed logging
              * @param mute Whether to mute or unmute
              * @return true if the command was processed successfully, false otherwise
              */
@@ -180,6 +254,66 @@ namespace szogfm {
              * @return true if the acknowledgement was sent successfully, false otherwise
              */
             bool sendAcknowledgement(uint16_t sequenceNum, bool success, uint8_t errorCode = 0);
+
+            /**
+             * Update node statistics
+             */
+            void updateStatistics();
+
+            /**
+             * Log detailed message information
+             */
+            void logMessageDetails(const String& direction, const String& messageType,
+                                   const void* message, size_t length);
+
+            /**
+             * Log radio status information
+             */
+            void logRadioStatus();
+
+            /**
+             * Log communication status information
+             */
+            void logCommunicationStatus();
+
+            /**
+             * Perform periodic self-tests
+             */
+            void performPeriodicSelfTest();
+
+            /**
+             * Test I2C bus and devices
+             * @return true if I2C is working correctly
+             */
+            bool testI2CBus();
+
+            /**
+             * Test radio functionality
+             * @return true if radio is working correctly
+             */
+            bool testRadio();
+
+            /**
+             * Test display functionality
+             * @return true if display is working correctly
+             */
+            bool testDisplay();
+
+            /**
+             * Test communication module
+             * @return true if communication is working correctly
+             */
+            bool testCommunication();
+
+            /**
+             * Show startup information on display
+             */
+            void showStartupInfo();
+
+            /**
+             * Show error information on display
+             */
+            void showErrorInfo(const String& error);
         };
 
     } // namespace node
