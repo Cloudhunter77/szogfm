@@ -112,6 +112,52 @@ namespace szogfm {
              * @param length Message length in bytes
              */
             void dumpMessageHex(const void* message, size_t length);
+
+            /**
+             * Test mode transitions functionality
+             * @return true if mode switching works correctly
+             */
+            bool testModeTransitions();
+
+            /**
+             * Test configuration mode access
+             * @return true if configuration mode can be accessed
+             */
+            bool testConfigurationMode();
+
+            /**
+             * Test parameter reading capability
+             * @return true if parameters can be read from the module
+             */
+            bool testParameterReading();
+
+            /**
+             * Set mode with automatic retries
+             * @param mode Target operating mode
+             * @param maxRetries Maximum number of retry attempts
+             * @return true if mode was set successfully
+             */
+            bool setModeWithRetries(uint8_t mode, int maxRetries);
+
+            /**
+             * Wait for AUX pin with timeout and detailed logging
+             * @param timeout Timeout in milliseconds
+             * @return true if AUX went high within timeout
+             */
+            bool waitForAUXWithTimeout(unsigned long timeout);
+
+            /**
+             * Get current mode as human-readable string
+             * @return String describing current mode
+             */
+            String getCurrentModeString() const;
+
+            /**
+             * Get mode name as string
+             * @param mode Mode number
+             * @return String describing the mode
+             */
+            String getModeString(uint8_t mode) const;
         };
 
     } // namespace communication

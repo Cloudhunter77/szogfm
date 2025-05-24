@@ -144,6 +144,46 @@ namespace szogfm {
              * @return true if present, false otherwise
              */
             bool isModulePresent() const;
+
+            /**
+             * Test I2C bus functionality and scan for devices
+             * @return true if I2C bus is working properly
+             */
+            bool testI2CBus();
+
+            /**
+             * Perform soft reset of the module
+             * @return true if reset was successful
+             */
+            bool performSoftReset();
+
+            /**
+             * Power up the module with proper initialization sequence
+             * @return true if power-up was successful
+             */
+            bool powerUpModule();
+
+            /**
+             * Configure band and channel spacing settings
+             * @return true if configuration was successful
+             */
+            bool configureBandAndSpacing();
+
+            /**
+             * Perform comprehensive functionality tests
+             * @return true if all tests pass
+             */
+            bool performFunctionalityTest();
+
+            /**
+             * Log current module status and register values
+             */
+            void logCurrentStatus();
+
+            /**
+             * Log current radio status information (RSSI, stereo, etc.)
+             */
+            void logCurrentRadioInfo();
         };
 
     } // namespace radio

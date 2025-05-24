@@ -4,6 +4,16 @@
 namespace szogfm {
     namespace controller {
 
+        // Helper function to repeat a character
+        String repeatChar(char c, int count) {
+            String result = "";
+            result.reserve(count);
+            for (int i = 0; i < count; i++) {
+                result += c;
+            }
+            return result;
+        }
+
         ControllerApplication::ControllerApplication()
                 : _initialized(false), _messageSequence(0),
                   _lastStatusRequestTime(0), _lastWebUpdateTime(0), _lastDiscoveryTime(0),
@@ -28,9 +38,9 @@ namespace szogfm {
         }
 
         bool ControllerApplication::initialize() {
-            Serial.println("\n" + String("=").repeat(60));
+            Serial.println("\n" + repeatChar('=', 60));
             Serial.println("🎵 SzögFM Controller Application Starting 🎵");
-            Serial.println(String("=").repeat(60));
+            Serial.println(repeatChar('=', 60));
             Serial.printf("⏰ Startup time: %lu ms\n", millis());
             Serial.printf("🔧 ESP32 Chip ID: %012llX\n", ESP.getEfuseMac());
             Serial.printf("💾 Free heap: %d bytes\n", ESP.getFreeHeap());
@@ -93,13 +103,13 @@ namespace szogfm {
             int discoveredNodes = discoverNodes();
             Serial.printf("📋 Initial discovery found %d nodes\n", discoveredNodes);
 
-            Serial.println("\n" + String("=").repeat(60));
+            Serial.println("\n" + repeatChar('=', 60));
             Serial.println("🎉 Controller Application Initialized Successfully! 🎉");
             Serial.println("📊 System Status:");
             Serial.printf("   • Free heap: %d bytes\n", ESP.getFreeHeap());
             Serial.printf("   • WiFi IP: %s\n", _wifiApMode ? WiFi.softAPIP().toString().c_str() : WiFi.localIP().toString().c_str());
             Serial.printf("   • Web interface: http://%s\n", _wifiApMode ? WiFi.softAPIP().toString().c_str() : WiFi.localIP().toString().c_str());
-            Serial.println(String("=").repeat(60));
+            Serial.println(repeatChar('=', 60));
 
             return true;
         }

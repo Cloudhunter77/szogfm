@@ -9,6 +9,16 @@
 namespace szogfm {
     namespace node {
 
+        // Helper function to repeat a character
+        String repeatChar(char c, int count) {
+            String result = "";
+            result.reserve(count);
+            for (int i = 0; i < count; i++) {
+                result += c;
+            }
+            return result;
+        }
+
         // Using input namespace for easier access to ButtonType
         using namespace szogfm::input;
 
@@ -45,9 +55,9 @@ namespace szogfm {
         }
 
         bool NodeApplication::initialize() {
-            Serial.println("\n" + String("=").repeat(60));
+            Serial.println("\n" + repeatChar('=', 60));
             Serial.println("🎵 SzögFM Node Application Starting 🎵");
-            Serial.println(String("=").repeat(60));
+            Serial.println(repeatChar('=', 60));
             Serial.printf("⏰ Boot time: %lu ms\n", millis());
             Serial.printf("🔧 ESP32 Chip ID: %012llX\n", ESP.getEfuseMac());
             Serial.printf("💾 Free heap: %d bytes\n", ESP.getFreeHeap());
@@ -256,7 +266,7 @@ namespace szogfm {
                 Serial.println("⚠️  Failed to send initial status (controller may not be ready)");
             }
 
-            Serial.println("\n" + String("=").repeat(60));
+            Serial.println("\n" + repeatChar('=', 60));
             Serial.println("🎉 Node Application Initialized Successfully! 🎉");
             Serial.println("📊 System Status:");
             Serial.printf("   • Node ID: %d\n", _config.getNodeId());
@@ -265,7 +275,7 @@ namespace szogfm {
             Serial.printf("   • Sensors: %s\n", _hasSensors ? "Available" : "None");
             Serial.printf("   • Self-test: %s\n", selfTestResult ? "PASSED" : "Warnings");
             Serial.println("🟢 Node is ready for operation!");
-            Serial.println(String("=").repeat(60));
+            Serial.println(repeatChar('=', 60));
 
             return true;
         }
@@ -538,7 +548,7 @@ namespace szogfm {
 
             Serial.printf("🎯 COMMAND %s: %s\n",
                           success ? "COMPLETED" : "FAILED", processingLog.c_str());
-            Serial.println(String("-").repeat(50));
+            Serial.println(repeatChar('-', 50));
 
             return success;
         }
