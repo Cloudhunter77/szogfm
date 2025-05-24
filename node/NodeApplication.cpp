@@ -1,5 +1,6 @@
 #include "NodeApplication.h"
 #include <Arduino.h>
+#include "../common/input/ButtonHandler.h" // Add explicit include for ButtonType
 
 #ifdef ENABLE_DHT_SENSOR
 #include <DHT.h>
@@ -7,6 +8,9 @@
 
 namespace szogfm {
     namespace node {
+
+// Using input namespace for easier access to ButtonType
+        using namespace szogfm::input;
 
 // Static instances for sensor (if enabled)
 #ifdef ENABLE_DHT_SENSOR
@@ -23,8 +27,8 @@ namespace szogfm {
                 // Add distinct pin values for I2C:
                   _pinUserButton(34),        // Analog input for buttons
                   _pinRelayControl(27),      // Control pin for relay
-                  _pinSDASensor(21),         // SDA pin for I2C (FM radio)
-                  _pinSCLSensor(22),         // SCL pin for I2C (FM radio)
+                  _pinSDASensor(21),         // SDA pin for I2C (FM radio and display)
+                  _pinSCLSensor(22),         // SCL pin for I2C (FM radio and display)
                   _pinM0(4),                 // M0 pin for EBYTE module
                   _pinM1(32),                // M1 pin for EBYTE module
                   _pinAUX(33) {              // AUX pin for EBYTE module
@@ -94,19 +98,15 @@ namespace szogfm {
             _radio->setMute(_config.isMuted());
             Serial.println("Radio parameters set");
 
-            // Initialize ST7789 TFT display
-            Serial.println("Initializing ST7789 TFT display...");
-            // CLK: GPIO18, MISO: GPIO19, MOSI: GPIO23, CS: GPIO35, RST: GPIO26, DC: GPIO25
-            _display = new display::ST7789Display(240, 240, 18, 19, 23, 12, 25, 26);
+            // Initialize SSD1306 OLED display (I2C)
+            Serial.println("Initializing SSD1306 OLED display...");
+            // Using default I2C pins (SDA: 21, SCL: 22)
+            _display = new display::SSD1306Display(128, 64, _pinSDASensor, _pinSCLSensor);
             if (!_display->initialize()) {
                 handleError("Failed to initialize display");
                 return false;
             }
-            Serial.println("ST7789 TFT display initialized successfully");
-
-            // Set display rotation if needed
-            _display->setRotation(2);  // Adjust based on your mounting orientation
-
+            Serial.println("SSD1306 OLED display initialized successfully");
 
             // Add this after display initialization in NodeApplication::initialize()
             if (_display) {
@@ -114,16 +114,16 @@ namespace szogfm {
 
                 // Display test message
                 _display->clear();
-                _display->displayMessage("TEST RED", 20, 20, 2);
-                _display->displayMessage("Display Check", 20, 60, 2);
+                _display->displayMessage("TEST PATTERN", 0, 10, 1);
+                _display->displayMessage("Display Check", 0, 30, 1);
                 _display->update();
                 delay(2000);
 
                 // Try another message
                 _display->clear();
-                _display->displayMessage("TEST GREEN", 20, 20, 2);
-                _display->displayMessage("If you see this", 20, 60, 2);
-                _display->displayMessage("display is working", 20, 100, 2);
+                _display->displayMessage("TEST COMPLETE", 0, 10, 1);
+                _display->displayMessage("If you see this", 0, 30, 1);
+                _display->displayMessage("display is working", 0, 40, 1);
                 _display->update();
                 delay(2000);
 
@@ -158,7 +158,6 @@ namespace szogfm {
             } else {
                 Serial.println("Communication module configured successfully");
             }
-
             // Set high debug level for communication module
             _commModule->setDebugLevel(2);
             // Perform diagnostics on the module
@@ -206,7 +205,19 @@ namespace szogfm {
             }
 
             // Update button handler
-            _buttonHandler->update();
+            bool buttonPressed = _buttonHandler->update();
+
+            // If button was pressed, log additional details about analog reading
+            if (buttonPressed) {
+                Serial.printf("[BUTTON] Analog value: %d\n", _buttonHandler->getLastAnalogValue());
+
+                // Print button type for debugging
+                ButtonType type = _buttonHandler->getLastButtonType();
+                Serial.printf("[BUTTON] Button type: %d\n", static_cast<int>(type));
+
+                // Also update display since user input occurred
+                updateDisplay();
+            }
 
             // Check if we should send a status update
             unsigned long currentTime = millis();
@@ -457,31 +468,39 @@ namespace szogfm {
 
             // Button: Frequency Up (1600-2200)
             _buttonHandler->addButton(input::ButtonType::FREQUENCY_UP, 1600, 2200, [this]() {
+                Serial.println("[BUTTON] Frequency UP button pressed");
                 uint16_t freq = _config.getFmFrequency();
                 freq += 10; // Increase by 0.1 MHz
                 if (freq > 10800) freq = 8750; // Wrap around
+                Serial.printf("[BUTTON] Increasing frequency to %.1f MHz\n", freq/100.0);
                 processSetFrequencyCommand(freq);
             });
 
             // Button: Frequency Down (2300-2900)
             _buttonHandler->addButton(input::ButtonType::FREQUENCY_DOWN, 2300, 2900, [this]() {
+                Serial.println("[BUTTON] Frequency DOWN button pressed");
                 uint16_t freq = _config.getFmFrequency();
                 freq -= 10; // Decrease by 0.1 MHz
                 if (freq < 8750) freq = 10800; // Wrap around
+                Serial.printf("[BUTTON] Decreasing frequency to %.1f MHz\n", freq/100.0);
                 processSetFrequencyCommand(freq);
             });
 
             // Button: Volume Up (3700-4095)
             _buttonHandler->addButton(input::ButtonType::VOLUME_UP, 3700, 4095, [this]() {
+                Serial.println("[BUTTON] Volume UP button pressed");
                 uint8_t vol = _config.getVolume();
                 if (vol < 15) vol++; // Increase volume if not at maximum
+                Serial.printf("[BUTTON] Increasing volume to %d\n", vol);
                 processSetVolumeCommand(vol);
             });
 
             // Button: Volume Down (1000-1400)
             _buttonHandler->addButton(input::ButtonType::VOLUME_DOWN, 1000, 1400, [this]() {
+                Serial.println("[BUTTON] Volume DOWN button pressed");
                 uint8_t vol = _config.getVolume();
                 if (vol > 0) vol--; // Decrease volume if not at minimum
+                Serial.printf("[BUTTON] Decreasing volume to %d\n", vol);
                 processSetVolumeCommand(vol);
             });
         }
@@ -489,6 +508,14 @@ namespace szogfm {
         void NodeApplication::updateDisplay() {
             if (!_display) {
                 return;
+            }
+
+            // Update FM signal strength on display
+            if (_radio) {
+                int rssi = _radio->getRssi();
+                // Cast to SSD1306Display to access the setFmSignalStrength method
+                display::SSD1306Display* oledDisplay = static_cast<display::SSD1306Display*>(_display);
+                oledDisplay->setFmSignalStrength(rssi);
             }
 
             // Update frequency display

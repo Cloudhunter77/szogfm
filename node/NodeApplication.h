@@ -5,7 +5,7 @@
 #include "../common/NodeConfig.h"
 #include "../common/communication/EbyteCommModule.h"
 #include "../common/radio/RDA5807Radio.h"
-#include "../common/display/ST7789Display.h"
+#include "../common/display/SSD1306Display.h"  // Changed from ST7789Display to SSD1306Display
 #include "../common/input/ButtonHandler.h"
 
 namespace szogfm {
@@ -65,7 +65,7 @@ namespace szogfm {
             NodeConfig _config;
             communication::EbyteCommModule* _commModule;
             radio::RDA5807Radio* _radio;
-            display::ST7789Display* _display;
+            display::SSD1306Display* _display;  // Changed from ST7789Display to SSD1306Display
             input::ButtonHandler* _buttonHandler;
 
             // State variables
