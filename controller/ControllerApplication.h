@@ -364,10 +364,27 @@ namespace szogfm {
             // ===========================================
 
             /**
+             * Initialize the communication module (EBYTE 433MHz)
+             * @return true if initialization was successful
+             */
+            bool initializeCommunication();
+
+            /**
              * Initialize the WiFi connection and web server
              * @return true if initialization was successful
              */
             bool initializeWebServer();
+
+            /**
+             * Set up all web server routes and handlers
+             */
+            void setupWebRoutes();
+
+            /**
+             * Create the main web interface HTML
+             * @return HTML string for the main interface
+             */
+            String createMainWebInterface();
 
             /**
              * Process any received messages from nodes
@@ -394,49 +411,10 @@ namespace szogfm {
                                     size_t dataLength, const String& description = "");
 
             /**
-             * Handle a received status message from a node
-             * @param status Status message to process
-             * @return true if message was handled successfully
-             */
-            bool handleStatusMessage(const szogfm::StatusMessage& status);
-
-            /**
-             * Handle a received acknowledgment message from a node
-             * @param ack Acknowledgment message to process
-             * @return true if message was handled successfully
-             */
-            bool handleAckMessage(const szogfm::AckMessage& ack);
-
-            /**
-             * Handle a received error message from a node
-             * @param error Error message header
-             * @return true if message was handled successfully
-             */
-            bool handleErrorMessage(const MessageHeader& error);
-
-            /**
              * Update node connection status based on timeouts
              * Marks nodes as disconnected if they haven't responded recently
              */
             void updateNodeConnectionStatus();
-
-            /**
-             * Log detailed information about sent/received messages
-             * @param direction "SENDING" or "RECEIVING"
-             * @param nodeId Node ID involved in communication
-             * @param messageType Type of message
-             * @param message Pointer to message data
-             * @param length Message length
-             */
-            void logMessageDetails(const String& direction, uint8_t nodeId,
-                                   const String& messageType, const void* message, size_t length);
-
-            /**
-             * Update communication statistics
-             * @param success Whether the communication was successful
-             * @param responseTime Response time in milliseconds (0 if not applicable)
-             */
-            void updateCommStats(bool success, unsigned long responseTime = 0);
 
             // ===========================================
             // WEB SERVER HANDLER METHODS
@@ -445,32 +423,12 @@ namespace szogfm {
             void handleRoot();                            // Main web interface
             void handleStatus();                          // Node status API
             void handleDetailedStatus();                  // Detailed system status API
-            void handleCommStats();                       // Communication statistics API
-            void handleSystemDiagnostics();               // System diagnostics page
-            void handleNodeDiagnostics();                 // Node-specific diagnostics
-
-            // Control endpoints
             void handleSetVolume();                       // Volume control API
             void handleSetFrequency();                    // Frequency control API
             void handleSetRelay();                        // Relay control API
             void handleSetMute();                         // Mute control API
-            void handleResetNode();                       // Node reset API
-
-            // Utility endpoints
             void handleDiscoverNodes();                   // Node discovery API
-            void handleTestNode();                        // Communication test API
             void handleResetStats();                      // Statistics reset API
-            void handleCommTest();                        // Communication diagnostics API
-
-            /**
-             * Handle recovery web interface root page
-             */
-            void handleRecoveryRoot();
-
-            /**
-             * Handle recovery status JSON endpoint
-             */
-            void handleRecoveryStatus();
         };
 
     } // namespace controller
