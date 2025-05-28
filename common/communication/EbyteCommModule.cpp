@@ -3,6 +3,16 @@
 namespace szogfm {
     namespace communication {
 
+        // Helper function to repeat a character for consistent formatting
+        String repeatChar(char c, int count) {
+            String result = "";
+            result.reserve(count);
+            for (int i = 0; i < count; i++) {
+                result += c;
+            }
+            return result;
+        }
+
         EbyteCommModule::EbyteCommModule(HardwareSerial* serial, int pinM0, int pinM1, int pinAUX)
                 : _serial(serial), _pinM0(pinM0), _pinM1(pinM1), _pinAUX(pinAUX),
                   _initialized(false), _lastRssi(-120), _channel(0), _address(0),
@@ -15,9 +25,9 @@ namespace szogfm {
         }
 
         bool EbyteCommModule::initialize() {
-            Serial.println("\n" + String("=").repeat(50));
+            Serial.println("\n" + repeatChar('=', 50));
             Serial.println("📡 EBYTE E49-400T20D Module Initialization");
-            Serial.println(String("=").repeat(50));
+            Serial.println(repeatChar('=', 50));
 
             // Configure pins with explicit direction and pull-up settings
             Serial.printf("📌 Configuring control pins:\n");
@@ -125,7 +135,7 @@ namespace szogfm {
                 return false;
             }
 
-            Serial.println(String("=").repeat(50));
+            Serial.println(repeatChar('=', 50));
             return _initialized;
         }
 
@@ -184,8 +194,7 @@ namespace szogfm {
         bool EbyteCommModule::testParameterReading() {
             Serial.println("      📊 Testing parameter reading...");
 
-            // This is a basic test - just verify we can switch modes
-            // Real parameter reading would require more complex parsing
+            // This is a basic test - just verify we can detect any response from the module
 
             // Test if we can detect any response from the module
             for (int attempt = 0; attempt < 3; attempt++) {
@@ -208,7 +217,7 @@ namespace szogfm {
             return false; // No response to any test
         }
 
-        bool EbyteCommModule::configure(uint8_t channel, uint8_t address, uint8_t airDataRate,
+        bool EbyteCommModule::configure(uint8_t channel, uint16_t address, uint8_t airDataRate,
                                         uint8_t uartBaud, uint8_t powerLevel) {
             if (!_initialized) {
                 _lastError = "Module not initialized";
@@ -727,7 +736,7 @@ namespace szogfm {
             const uint8_t* data = static_cast<const uint8_t*>(message);
 
             Serial.println("   📦 Message Hex Dump:");
-            Serial.println("   " + String("-").repeat(48));
+            Serial.println("   " + repeatChar('-', 48));
 
             for (size_t i = 0; i < length; i += 16) {
                 // Address
@@ -753,7 +762,7 @@ namespace szogfm {
                 Serial.println();
             }
 
-            Serial.println("   " + String("-").repeat(48));
+            Serial.println("   " + repeatChar('-', 48));
 
             // Message interpretation if it's a known type
             if (length >= sizeof(MessageHeader)) {
@@ -849,7 +858,7 @@ namespace szogfm {
             }
 
             Serial.println("\n📊 EBYTE Module Parameters");
-            Serial.println(String("=").repeat(40));
+            Serial.println(repeatChar('=', 40));
             Serial.printf("Initialization: %s\n", _initialized ? "✅ SUCCESS" : "❌ FAILED");
             Serial.printf("Channel: 0x%02X (%d)\n", _channel, _channel);
             Serial.printf("Address: 0x%04X (%d)\n", _address, _address);
@@ -873,7 +882,7 @@ namespace szogfm {
                 Serial.println("\nLast Error: " + _lastError);
             }
 
-            Serial.println(String("=").repeat(40));
+            Serial.println(repeatChar('=', 40));
         }
 
         void EbyteCommModule::setDebugLevel(uint8_t level) {
@@ -890,7 +899,7 @@ namespace szogfm {
 
         void EbyteCommModule::performDiagnostics() {
             Serial.println("\n🔬 EBYTE Module Diagnostics");
-            Serial.println(String("=").repeat(50));
+            Serial.println(repeatChar('=', 50));
 
             // Basic connectivity test
             Serial.println("1. Basic Connectivity:");
@@ -951,7 +960,7 @@ namespace szogfm {
                 }
             }
 
-            Serial.println(String("=").repeat(50));
+            Serial.println(repeatChar('=', 50));
         }
 
     } // namespace communication

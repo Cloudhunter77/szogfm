@@ -3,17 +3,27 @@
 namespace szogfm {
     namespace radio {
 
+        // Helper function to repeat a character for consistent formatting
+        String repeatChar(char c, int count) {
+            String result = "";
+            result.reserve(count);
+            for (int i = 0; i < count; i++) {
+                result += c;
+            }
+            return result;
+        }
+
         RDA5807Radio::RDA5807Radio(int sda, int scl)
                 : _sda(sda), _scl(scl), _initialized(false), _frequency(8750), _volume(8),
                   _muted(false), _mono(false), _lastUpdateTime(0) {
-            // Initialize register cache
+            // Initialize register cache to zero
             memset(_regCache, 0, sizeof(_regCache));
         }
 
         bool RDA5807Radio::initialize() {
-            Serial.println("\n" + String("=").repeat(50));
+            Serial.println("\n" + repeatChar('=', 50));
             Serial.println("📻 RDA5807M FM Radio Module Initialization");
-            Serial.println(String("=").repeat(50));
+            Serial.println(repeatChar('=', 50));
 
             // Initialize I2C with specified pins or defaults
             if (_sda >= 0 && _scl >= 0) {
@@ -108,7 +118,7 @@ namespace szogfm {
             logCurrentStatus();
 
             Serial.println("🎉 RDA5807M initialization completed successfully!");
-            Serial.println(String("=").repeat(50));
+            Serial.println(repeatChar('=', 50));
 
             return true;
         }

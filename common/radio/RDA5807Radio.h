@@ -143,7 +143,7 @@ namespace szogfm {
              * Check if the module is present and responding
              * @return true if present, false otherwise
              */
-            bool isModulePresent() const;
+            bool isModulePresent();
 
             /**
              * Test I2C bus functionality and scan for devices
