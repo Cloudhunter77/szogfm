@@ -1,0 +1,1310 @@
+#include "ControllerApplication.h"
+#include <ArduinoJson.h>
+#include <esp_task_wdt.h>
+
+namespace szogfm {
+    namespace controller {
+
+        // Helper function to repeat a character for consistent formatting
+        String repeatChar(char c, int count) {
+            String result = "";
+            result.reserve(count);
+            for (int i = 0; i < count; i++) {
+                result += c;
+            }
+            return result;
+        }
+
+        ControllerApplication::ControllerApplication()
+                : _initialized(false), _messageSequence(0),
+                  _lastStatusRequestTime(0), _lastWebUpdateTime(0), _lastDiscoveryTime(0),
+
+                // Default pin assignments for EBYTE module
+                  _pinM0(4),              // M0 pin for EBYTE module
+                  _pinM1(32),             // M1 pin for EBYTE module
+                  _pinAUX(33),            // AUX pin for EBYTE module
+
+                // WiFi configuration (defaults to AP mode)
+                  _wifiSsid("SzogFM_Controller"),
+                  _wifiPassword("GombaSzog24"),
+                  _wifiApMode(true) {
+
+            _commModule = nullptr;
+            _webServer = nullptr;
+
+            // Enable watchdog timer to prevent hangs
+            esp_task_wdt_init(60, true); // 60 second watchdog
+            esp_task_wdt_add(NULL);
+
+            // Initialize default configuration
+            _config.wifiSsid = "SzogFM_Controller";
+            _config.wifiPassword = "GombaSzog24";
+            _config.accessPointMode = true;
+            _config.radioChannel = 0x1A;
+            _config.radioAddress = 0x1234;
+            _config.transmissionPower = 0; // Maximum power
+            _config.statusRequestInterval = 10000; // 10 seconds
+            _config.discoveryInterval = 60000; // 60 seconds
+            _config.messageTimeout = 3000; // 3 seconds
+            _config.maxRetryCount = 5;
+            _config.verboseDebugging = true;
+            _config.communicationDebugLevel = 1; // Reduced from 2
+
+            // Initialize communication statistics
+            memset(&_commStats, 0, sizeof(_commStats));
+            _commStats.lastResetTime = millis();
+            _commStats.minimumResponseTime = ULONG_MAX;
+        }
+
+        ControllerApplication::~ControllerApplication() {
+            if (_commModule) {
+                delete _commModule;
+            }
+            if (_webServer) {
+                delete _webServer;
+            }
+        }
+
+        bool ControllerApplication::initialize() {
+            Serial.println("\n" + repeatChar('=', 60));
+            Serial.println("🎵 SzögFM Controller Application Starting 🎵");
+            Serial.println(repeatChar('=', 60));
+            Serial.printf("⏰ Startup time: %lu ms\n", millis());
+            Serial.printf("🔧 ESP32 Chip ID: %012llX\n", ESP.getEfuseMac());
+            Serial.printf("💾 Free heap: %d bytes\n", ESP.getFreeHeap());
+            Serial.printf("📡 WiFi mode: %s\n", _config.accessPointMode ? "Access Point" : "Station");
+
+            // Reset watchdog to prevent timeout during init
+            esp_task_wdt_reset();
+            Serial.println("🐕 Watchdog timer initialized and reset");
+            Serial.println();
+
+            // Initialize communication module with enhanced error handling
+            Serial.println("📻 Initializing EBYTE Communication Module...");
+            Serial.printf("   📌 Pin configuration - M0:%d, M1:%d, AUX:%d\n", _pinM0, _pinM1, _pinAUX);
+
+            // Add delay to let power stabilize
+            delay(1000);
+            esp_task_wdt_reset();
+
+            _commModule = new communication::EbyteCommModule(&Serial2, _pinM0, _pinM1, _pinAUX);
+
+            // Try initialization with retries
+            bool commInitSuccess = false;
+            for (int attempt = 1; attempt <= 3 && !commInitSuccess; attempt++) {
+                Serial.printf("📡 Communication module initialization attempt %d/3\n", attempt);
+
+                if (_commModule->initialize()) {
+                    commInitSuccess = true;
+                    Serial.println("✅ Communication module initialized successfully");
+                } else {
+                    Serial.printf("❌ Attempt %d failed: %s\n", attempt, _commModule->getLastError().c_str());
+                    if (attempt < 3) {
+                        Serial.println("⏳ Waiting before retry...");
+                        delay(2000);
+                        esp_task_wdt_reset();
+                    }
+                }
+            }
+
+            if (!commInitSuccess) {
+                Serial.println("🚨 CRITICAL: Communication module failed to initialize after all attempts");
+                Serial.println("   Possible causes:");
+                Serial.println("   • EBYTE module not connected properly");
+                Serial.println("   • Power supply issues");
+                Serial.println("   • Incorrect pin assignments");
+                Serial.println("   • Faulty EBYTE module");
+
+                // Continue anyway for web interface functionality
+                Serial.println("⚠️  Continuing without communication module (web interface only)");
+            }
+
+            esp_task_wdt_reset();
+
+            // Configure communication module with more conservative settings
+            if (commInitSuccess) {
+                Serial.println("⚙️  Configuring communication module...");
+                Serial.println("   📊 Configuration parameters:");
+                Serial.printf("      • Channel: 0x%02X (%d)\n", _config.radioChannel, _config.radioChannel);
+                Serial.printf("      • Address: 0x%04X\n", _config.radioAddress);
+                Serial.println("      • Air Data Rate: 2.4k baud");
+                Serial.println("      • UART Baud: 9600");
+                Serial.println("      • Power Level: 20dBm (max)");
+
+                // Try configuration with timeout
+                bool configSuccess = false;
+                for (int attempt = 1; attempt <= 2 && !configSuccess; attempt++) {
+                    Serial.printf("⚙️  Configuration attempt %d/2\n", attempt);
+
+                    if (_commModule->configure(_config.radioChannel, _config.radioAddress,
+                                               communication::AIR_2K4, communication::UART_9600, _config.transmissionPower)) {
+                        configSuccess = true;
+                        Serial.println("✅ Communication module configured successfully");
+                    } else {
+                        Serial.printf("⚠️  Configuration attempt %d failed: %s\n", attempt, _commModule->getLastError().c_str());
+                        delay(1000);
+                        esp_task_wdt_reset();
+                    }
+                }
+
+                if (!configSuccess) {
+                    Serial.println("⚠️  Configuration failed, using default settings");
+                }
+
+                // Set moderate debug level to reduce log spam
+                _commModule->setDebugLevel(1); // Reduced from 2 to 1
+                Serial.println("🐛 Communication debug level set to 1 (basic logging)");
+            }
+
+            esp_task_wdt_reset();
+
+            // Initialize WiFi and web server
+            Serial.println("\n🌐 Initializing WiFi and Web Server...");
+            if (!initializeWebServer()) {
+                Serial.println("❌ FAILED to initialize web server");
+                // This is also critical, but continue anyway
+                Serial.println("⚠️  Continuing without web server");
+            } else {
+                Serial.println("✅ Web server initialized successfully");
+            }
+
+            esp_task_wdt_reset();
+            _initialized = true;
+
+            // Only do initial discovery if communication module is working
+            if (commInitSuccess) {
+                Serial.println("\n🔍 Starting initial node discovery...");
+                // Limit initial discovery to reduce startup time
+                int discoveredNodes = discoverNodes(5); // Only discover first 5 nodes initially
+                Serial.printf("📋 Initial discovery completed (%d requests sent)\n", discoveredNodes);
+            } else {
+                Serial.println("\n⚠️  Skipping node discovery - communication module not available");
+            }
+
+            esp_task_wdt_reset();
+
+            Serial.println("\n" + repeatChar('=', 60));
+            Serial.println("🎉 Controller Application Initialized! 🎉");
+            Serial.println("📊 System Status:");
+            Serial.printf("   • Free heap: %d bytes\n", ESP.getFreeHeap());
+            Serial.printf("   • Communication: %s\n", commInitSuccess ? "✅ Active" : "❌ Disabled");
+            if (_config.accessPointMode) {
+                Serial.printf("   • WiFi AP IP: %s\n", WiFi.softAPIP().toString().c_str());
+                Serial.printf("   • Web interface: http://%s\n", WiFi.softAPIP().toString().c_str());
+            } else {
+                Serial.printf("   • WiFi STA IP: %s\n", WiFi.localIP().toString().c_str());
+                Serial.printf("   • Web interface: http://%s\n", WiFi.localIP().toString().c_str());
+            }
+            Serial.printf("   • Watchdog: ✅ Active (60s timeout)\n");
+            Serial.println(repeatChar('=', 60));
+
+            return true; // Always return true to prevent reboot loops
+        }
+
+        void ControllerApplication::update() {
+            if (!_initialized) {
+                return;
+            }
+
+            // Reset watchdog to prevent system resets
+            static unsigned long lastWatchdogReset = 0;
+            unsigned long currentTime = millis();
+
+            if (currentTime - lastWatchdogReset > 10000) { // Reset every 10 seconds
+                esp_task_wdt_reset();
+                lastWatchdogReset = currentTime;
+            }
+
+            static unsigned long lastHeartbeat = 0;
+
+            // Heartbeat every 30 seconds with more detailed info
+            if (currentTime - lastHeartbeat > 30000) {
+                Serial.printf("\n💓 System heartbeat - Uptime: %lu seconds, Free heap: %d bytes\n",
+                              currentTime / 1000, ESP.getFreeHeap());
+                Serial.printf("📊 Communication stats - Sent: %lu, Received: %lu, Success rate: %.1f%%\n",
+                              _commStats.totalMessagesSent, _commStats.totalMessagesReceived,
+                              _commStats.messageSuccessRate);
+                Serial.printf("📡 Module status: %s, Pending messages: %d\n",
+                              _commModule ? "Active" : "Disabled", _pendingMessages.size());
+
+                // Memory check - warn if getting low
+                if (ESP.getFreeHeap() < 50000) {
+                    Serial.printf("⚠️  Low memory warning: %d bytes free\n", ESP.getFreeHeap());
+                }
+
+                lastHeartbeat = currentTime;
+            }
+
+            // Only process communication if module is available
+            if (_commModule) {
+                // Process any received messages with error handling
+                try {
+                    bool messageProcessed = processMessages();
+                    if (messageProcessed && _config.verboseDebugging) {
+                        Serial.println("📨 Message processing cycle completed");
+                    }
+                } catch (...) {
+                    Serial.println("❌ Exception in message processing - continuing");
+                }
+
+                // Process any pending messages that need to be retried
+                try {
+                    processPendingMessages();
+                } catch (...) {
+                    Serial.println("❌ Exception in pending message processing - continuing");
+                }
+
+                // Update node connection status
+                updateNodeConnectionStatus();
+
+                // Check if we should request status updates from all nodes (less frequently)
+                if (currentTime - _lastStatusRequestTime > _config.statusRequestInterval) {
+                    if (_config.verboseDebugging) {
+                        Serial.printf("🔄 Requesting status from all nodes (interval: %lu ms)\n", _config.statusRequestInterval);
+                    }
+                    requestAllNodeStatus();
+                    _lastStatusRequestTime = currentTime;
+                }
+
+                // Periodic node discovery (less frequently and with limits)
+                if (currentTime - _lastDiscoveryTime > _config.discoveryInterval) {
+                    Serial.println("🔍 Performing periodic node discovery (limited)...");
+                    int discoveredNodes = discoverNodes(3); // Only discover 3 nodes at a time
+                    Serial.printf("📋 Periodic discovery completed (%d requests sent)\n", discoveredNodes);
+                    _lastDiscoveryTime = currentTime;
+                }
+
+                // Update communication module
+                try {
+                    _commModule->update();
+                } catch (...) {
+                    Serial.println("❌ Exception in communication module update - continuing");
+                }
+
+                // Show pending messages count periodically but less frequently
+                if (_config.verboseDebugging && (currentTime % 30000 == 0)) {
+                    if (!_pendingMessages.empty()) {
+                        Serial.printf("⏳ Pending messages: %d\n", _pendingMessages.size());
+                    }
+                }
+            }
+
+            // Handle web server requests (always available)
+            try {
+                _webServer->handleClient();
+            } catch (...) {
+                Serial.println("❌ Exception in web server handling - continuing");
+            }
+
+            // Cleanup old pending messages to prevent memory issues
+            if (_pendingMessages.size() > 50) {
+                Serial.printf("🧹 Cleaning up old pending messages (count: %d)\n", _pendingMessages.size());
+                _pendingMessages.erase(_pendingMessages.begin(), _pendingMessages.begin() + 10);
+                Serial.println("✅ Cleaned up 10 old pending messages");
+            }
+        }
+
+        bool ControllerApplication::setNodeVolume(uint8_t nodeId, uint8_t volume) {
+            // Validate volume range
+            if (volume > 15) {
+                Serial.printf("⚠️  Volume value %d exceeds maximum (15), clamping to 15\n", volume);
+                volume = 15;
+            }
+
+            String description = "Set volume to " + String(volume) + " for node " + String(nodeId);
+            Serial.printf("🔊 %s\n", description.c_str());
+
+            // Send command to set volume
+            bool success = sendCommandMessage(nodeId, Command::SET_VOLUME, &volume, 1, description);
+
+            if (success) {
+                Serial.printf("✅ Volume command queued successfully for node %d\n", nodeId);
+
+                // Update local cache optimistically
+                if (_nodeStatus.find(nodeId) != _nodeStatus.end()) {
+                    _nodeStatus[nodeId].volume = volume;
+                    _nodeStatus[nodeId].lastCommandTime = millis();
+                    _nodeStatus[nodeId].lastCommand = "SET_VOLUME(" + String(volume) + ")";
+                }
+            } else {
+                Serial.printf("❌ Failed to queue volume command for node %d\n", nodeId);
+            }
+
+            return success;
+        }
+
+        bool ControllerApplication::setNodeFrequency(uint8_t nodeId, uint16_t frequency) {
+            // Validate frequency range
+            if (frequency < 8750 || frequency > 10800) {
+                Serial.printf("❌ Invalid frequency value: %d (must be between 8750-10800)\n", frequency);
+                return false;
+            }
+
+            String description = "Set frequency to " + String(frequency/100.0, 1) + " MHz for node " + String(nodeId);
+            Serial.printf("📻 %s\n", description.c_str());
+
+            // Prepare data (little-endian: low byte first, high byte second)
+            uint8_t data[2];
+            data[0] = frequency & 0xFF;
+            data[1] = (frequency >> 8) & 0xFF;
+
+            if (_config.verboseDebugging) {
+                Serial.printf("📦 Frequency data bytes: 0x%02X 0x%02X (little-endian)\n", data[0], data[1]);
+            }
+
+            // Send command to set frequency
+            bool success = sendCommandMessage(nodeId, Command::SET_FREQUENCY, data, 2, description);
+
+            if (success) {
+                Serial.printf("✅ Frequency command queued successfully for node %d\n", nodeId);
+
+                // Update local cache optimistically
+                if (_nodeStatus.find(nodeId) != _nodeStatus.end()) {
+                    _nodeStatus[nodeId].frequency = frequency;
+                    _nodeStatus[nodeId].lastCommandTime = millis();
+                    _nodeStatus[nodeId].lastCommand = "SET_FREQUENCY(" + String(frequency/100.0, 1) + "MHz)";
+                }
+            } else {
+                Serial.printf("❌ Failed to queue frequency command for node %d\n", nodeId);
+            }
+
+            return success;
+        }
+
+        bool ControllerApplication::setNodeRelayState(uint8_t nodeId, bool state) {
+            // Prepare data
+            uint8_t data = state ? 1 : 0;
+
+            String description = "Set relay " + String(state ? "ON" : "OFF") + " for node " + String(nodeId);
+            Serial.printf("🔌 %s\n", description.c_str());
+
+            // Send command to set relay state
+            bool success = sendCommandMessage(nodeId, Command::TOGGLE_RELAY, &data, 1, description);
+
+            if (success) {
+                Serial.printf("✅ Relay command queued successfully for node %d\n", nodeId);
+
+                // Update local cache optimistically
+                if (_nodeStatus.find(nodeId) != _nodeStatus.end()) {
+                    _nodeStatus[nodeId].relayState = state;
+                    _nodeStatus[nodeId].lastCommandTime = millis();
+                    _nodeStatus[nodeId].lastCommand = "TOGGLE_RELAY(" + String(state ? "ON" : "OFF") + ")";
+                }
+            } else {
+                Serial.printf("❌ Failed to queue relay command for node %d\n", nodeId);
+            }
+
+            return success;
+        }
+
+        bool ControllerApplication::setNodeMute(uint8_t nodeId, bool mute) {
+            String description = "Set mute " + String(mute ? "ON" : "OFF") + " for node " + String(nodeId);
+            Serial.printf("🔇 %s\n", description.c_str());
+
+            // Send command to set mute state
+            Command cmd = mute ? Command::MUTE : Command::UNMUTE;
+            bool success = sendCommandMessage(nodeId, cmd, nullptr, 0, description);
+
+            if (success) {
+                Serial.printf("✅ Mute command queued successfully for node %d\n", nodeId);
+
+                // Update local cache optimistically
+                if (_nodeStatus.find(nodeId) != _nodeStatus.end()) {
+                    _nodeStatus[nodeId].muted = mute;
+                    _nodeStatus[nodeId].lastCommandTime = millis();
+                    _nodeStatus[nodeId].lastCommand = mute ? "MUTE" : "UNMUTE";
+                }
+            } else {
+                Serial.printf("❌ Failed to queue mute command for node %d\n", nodeId);
+            }
+
+            return success;
+        }
+
+        // Broadcast methods (send to all nodes with nodeId = 0)
+        bool ControllerApplication::setAllNodesVolume(uint8_t volume) {
+            Serial.printf("🔊 Setting volume for ALL nodes to %d (broadcast)\n", volume);
+            return setNodeVolume(0, volume);
+        }
+
+        bool ControllerApplication::setAllNodesFrequency(uint16_t frequency) {
+            Serial.printf("📻 Setting frequency for ALL nodes to %.1f MHz (broadcast)\n", frequency/100.0);
+            return setNodeFrequency(0, frequency);
+        }
+
+        bool ControllerApplication::setAllNodesRelayState(bool state) {
+            Serial.printf("🔌 Setting relay for ALL nodes to %s (broadcast)\n", state ? "ON" : "OFF");
+            return setNodeRelayState(0, state);
+        }
+
+        bool ControllerApplication::setAllNodesMute(bool mute) {
+            Serial.printf("🔇 Setting mute for ALL nodes to %s (broadcast)\n", mute ? "ON" : "OFF");
+            return setNodeMute(0, mute);
+        }
+
+        const NodeStatus* ControllerApplication::getNodeStatus(uint8_t nodeId) const {
+            auto it = _nodeStatus.find(nodeId);
+            if (it != _nodeStatus.end()) {
+                return &(it->second);
+            }
+            return nullptr;
+        }
+
+        std::vector<NodeStatus> ControllerApplication::getAllNodeStatus() const {
+            std::vector<NodeStatus> result;
+            result.reserve(_nodeStatus.size());
+
+            for (const auto& pair : _nodeStatus) {
+                result.push_back(pair.second);
+            }
+
+            return result;
+        }
+
+        bool ControllerApplication::requestNodeStatus(uint8_t nodeId) {
+            String description = "Request status from node " + String(nodeId);
+            if (_config.verboseDebugging) {
+                Serial.printf("📊 %s\n", description.c_str());
+            }
+
+            bool success = sendCommandMessage(nodeId, Command::GET_STATUS, nullptr, 0, description);
+
+            if (success && _config.verboseDebugging) {
+                Serial.printf("✅ Status request queued for node %d\n", nodeId);
+            } else if (!success) {
+                Serial.printf("❌ Failed to queue status request for node %d\n", nodeId);
+            }
+
+            return success;
+        }
+
+        bool ControllerApplication::requestAllNodeStatus() {
+            if (_config.verboseDebugging) {
+                Serial.println("📊 Requesting status from ALL nodes (broadcast)");
+            }
+            return requestNodeStatus(0);
+        }
+
+        bool ControllerApplication::resetNode(uint8_t nodeId) {
+            String description = "RESET node " + String(nodeId);
+            Serial.printf("🔄 %s\n", description.c_str());
+
+            bool success = sendCommandMessage(nodeId, Command::RESET, nullptr, 0, description);
+
+            if (success) {
+                Serial.printf("✅ Reset command queued for node %d\n", nodeId);
+
+                // Remove node from status cache as it will restart
+                if (_nodeStatus.find(nodeId) != _nodeStatus.end()) {
+                    _nodeStatus.erase(nodeId);
+                    Serial.printf("🗑️  Removed node %d from cache (reset pending)\n", nodeId);
+                }
+            } else {
+                Serial.printf("❌ Failed to queue reset command for node %d\n", nodeId);
+            }
+
+            return success;
+        }
+
+        int ControllerApplication::discoverNodes(int maxNodes) {
+            Serial.printf("🔍 Starting node discovery process (max %d nodes)...\n", maxNodes);
+
+            if (!_commModule) {
+                Serial.println("❌ Cannot discover nodes - communication module not available");
+                return 0;
+            }
+
+            // Limit the number of nodes to discover to prevent overwhelming the system
+            int nodesToDiscover = (maxNodes > 0) ? std::min(maxNodes, 20) : 20;
+
+            // Request status from specified number of node IDs
+            int discoveredCount = 0;
+            for (uint8_t nodeId = 1; nodeId <= nodesToDiscover; nodeId++) {
+                if (requestNodeStatus(nodeId)) {
+                    discoveredCount++;
+                }
+
+                // Add delay between requests to prevent overwhelming the module
+                delay(100);
+
+                // Reset watchdog periodically during discovery
+                if (nodeId % 5 == 0) {
+                    esp_task_wdt_reset();
+                }
+            }
+
+            Serial.printf("📡 Discovery requests sent to %d potential nodes\n", discoveredCount);
+            return discoveredCount;
+        }
+
+        // Overloaded version for backward compatibility
+        int ControllerApplication::discoverNodes() {
+            return discoverNodes(20); // Default to all 20 nodes
+        }
+
+        bool ControllerApplication::testNodeCommunication(uint8_t nodeId) {
+            Serial.printf("🧪 Testing communication with node %d...\n", nodeId);
+
+            bool success = requestNodeStatus(nodeId);
+
+            if (success) {
+                Serial.printf("✅ Communication test initiated for node %d (response pending)\n", nodeId);
+            } else {
+                Serial.printf("❌ Communication test failed for node %d\n", nodeId);
+            }
+
+            return success;
+        }
+
+        void ControllerApplication::resetCommunicationStats() {
+            Serial.println("🔄 Resetting communication statistics...");
+            memset(&_commStats, 0, sizeof(_commStats));
+            _commStats.lastResetTime = millis();
+            _commStats.minimumResponseTime = ULONG_MAX;
+            Serial.println("✅ Communication statistics reset");
+        }
+
+        String ControllerApplication::getDetailedSystemStatus() const {
+            DynamicJsonDocument doc(4096);
+
+            // System information
+            doc["system"]["uptime"] = millis();
+            doc["system"]["free_heap"] = ESP.getFreeHeap();
+            doc["system"]["chip_id"] = String(ESP.getEfuseMac(), HEX);
+            doc["system"]["verbose_debugging"] = _config.verboseDebugging;
+
+            // Communication statistics
+            JsonObject commStats = doc.createNestedObject("communication_stats");
+            commStats["total_sent"] = _commStats.totalMessagesSent;
+            commStats["total_received"] = _commStats.totalMessagesReceived;
+            commStats["total_retries"] = _commStats.totalRetries;
+            commStats["total_timeouts"] = _commStats.totalTimeouts;
+            commStats["total_errors"] = _commStats.totalErrors;
+            commStats["success_rate"] = _commStats.messageSuccessRate;
+            commStats["avg_response_time"] = _commStats.averageResponseTime;
+            commStats["last_reset"] = _commStats.lastResetTime;
+
+            // Pending messages
+            doc["pending_messages"]["count"] = _pendingMessages.size();
+            JsonArray pending = doc.createNestedArray("pending_messages_list");
+            for (const auto& msg : _pendingMessages) {
+                JsonObject pendingMsg = pending.createNestedObject();
+                pendingMsg["sequence"] = msg.sequenceNum;
+                pendingMsg["node_id"] = msg.nodeId;
+                pendingMsg["retry_count"] = msg.retryCount;
+                pendingMsg["age_ms"] = millis() - msg.firstSentTime;
+                pendingMsg["description"] = msg.commandDescription;
+            }
+
+            // Node information
+            JsonArray nodes = doc.createNestedArray("nodes");
+            for (const auto& pair : _nodeStatus) {
+                JsonObject node = nodes.createNestedObject();
+                const NodeStatus& status = pair.second;
+
+                node["id"] = status.nodeId;
+                node["connected"] = status.isConnected;
+                node["last_seen"] = millis() - status.lastSeenTime;
+                node["total_commands"] = status.totalCommands;
+                node["successful_commands"] = status.successfulCommands;
+                node["failed_commands"] = status.failedCommands;
+                node["last_command"] = status.lastCommand;
+                node["last_command_success"] = status.lastCommandSuccess;
+
+                if (status.totalCommands > 0) {
+                    node["command_success_rate"] = (float)status.successfulCommands / status.totalCommands * 100.0f;
+                    node["avg_response_time"] = (float)status.totalResponseTime / status.totalCommands;
+                }
+            }
+
+            String result;
+            serializeJsonPretty(doc, result);
+            return result;
+        }
+
+        bool ControllerApplication::setConfiguration(const ControllerConfig& config) {
+            _config = config;
+
+            // Apply communication debug level if changed
+            if (_commModule) {
+                _commModule->setDebugLevel(_config.communicationDebugLevel);
+            }
+
+            Serial.println("✅ Controller configuration updated");
+            return true;
+        }
+
+        void ControllerApplication::setCommunicationDebugLevel(uint8_t level) {
+            _config.communicationDebugLevel = level;
+            if (_commModule) {
+                _commModule->setDebugLevel(level);
+            }
+        }
+
+        // Private helper methods implementation
+
+        bool ControllerApplication::initializeWebServer() {
+            Serial.println("🌐 Setting up WiFi and Web Server...");
+
+            try {
+                // Initialize WiFi with timeout
+                if (_config.accessPointMode) {
+                    Serial.printf("📡 Creating WiFi Access Point: %s\n", _config.wifiSsid.c_str());
+                    bool apResult = WiFi.softAP(_config.wifiSsid.c_str(), _config.wifiPassword.c_str());
+                    if (!apResult) {
+                        Serial.println("❌ Failed to create WiFi Access Point");
+                        return false;
+                    }
+                    delay(2000); // Give AP time to start
+                    Serial.printf("✅ AP IP address: %s\n", WiFi.softAPIP().toString().c_str());
+                } else {
+                    Serial.printf("📡 Connecting to WiFi network: %s\n", _config.wifiSsid.c_str());
+                    WiFi.begin(_config.wifiSsid.c_str(), _config.wifiPassword.c_str());
+
+                    unsigned long startTime = millis();
+                    while (WiFi.status() != WL_CONNECTED && millis() - startTime < 30000) {
+                        delay(500);
+                        Serial.print(".");
+                        esp_task_wdt_reset(); // Reset watchdog during connection
+                    }
+
+                    if (WiFi.status() != WL_CONNECTED) {
+                        Serial.println("\n❌ Failed to connect to WiFi network");
+                        Serial.println("⚠️  Falling back to Access Point mode");
+                        // Fallback to AP mode
+                        WiFi.softAP("SzogFM_Emergency", "emergency123");
+                        delay(2000);
+                        Serial.printf("🆘 Emergency AP IP: %s\n", WiFi.softAPIP().toString().c_str());
+                    } else {
+                        Serial.printf("\n✅ Connected to %s\n", _config.wifiSsid.c_str());
+                        Serial.printf("📍 IP address: %s\n", WiFi.localIP().toString().c_str());
+                    }
+                }
+
+                // Set up mDNS responder with error handling
+                try {
+                    if (MDNS.begin("szogfm")) {
+                        Serial.println("🔍 mDNS responder started (szogfm.local)");
+                    }
+                } catch (...) {
+                    Serial.println("⚠️  mDNS failed to start - continuing without it");
+                }
+
+                // Initialize web server
+                _webServer = new WebServer(80);
+
+                // Set up enhanced routes with error handling
+                _webServer->on("/", HTTP_GET, [this]() {
+                    try { handleRoot(); }
+                    catch (...) { _webServer->send(500, "text/plain", "Internal Server Error"); }
+                });
+
+                _webServer->on("/status", HTTP_GET, [this]() {
+                    try { handleStatus(); }
+                    catch (...) { _webServer->send(500, "application/json", "{\"error\":\"Internal Server Error\"}"); }
+                });
+
+                _webServer->on("/detailed_status", HTTP_GET, [this]() {
+                    try { handleDetailedStatus(); }
+                    catch (...) { _webServer->send(500, "application/json", "{\"error\":\"Internal Server Error\"}"); }
+                });
+
+                _webServer->on("/comm_stats", HTTP_GET, [this]() {
+                    try { handleCommStats(); }
+                    catch (...) { _webServer->send(500, "application/json", "{\"error\":\"Internal Server Error\"}"); }
+                });
+
+                // Command endpoints with error handling
+                _webServer->on("/set_volume", HTTP_POST, [this]() {
+                    try { handleSetVolume(); }
+                    catch (...) { _webServer->send(500, "text/plain", "Command failed"); }
+                });
+
+                _webServer->on("/set_frequency", HTTP_POST, [this]() {
+                    try { handleSetFrequency(); }
+                    catch (...) { _webServer->send(500, "text/plain", "Command failed"); }
+                });
+
+                _webServer->on("/set_relay", HTTP_POST, [this]() {
+                    try { handleSetRelay(); }
+                    catch (...) { _webServer->send(500, "text/plain", "Command failed"); }
+                });
+
+                _webServer->on("/set_mute", HTTP_POST, [this]() {
+                    try { handleSetMute(); }
+                    catch (...) { _webServer->send(500, "text/plain", "Command failed"); }
+                });
+
+                // Utility endpoints
+                _webServer->on("/discover_nodes", HTTP_POST, [this]() {
+                    try { handleDiscoverNodes(); }
+                    catch (...) { _webServer->send(500, "text/plain", "Discovery failed"); }
+                });
+
+                _webServer->on("/reset_stats", HTTP_POST, [this]() {
+                    try { handleResetStats(); }
+                    catch (...) { _webServer->send(500, "text/plain", "Reset failed"); }
+                });
+
+                _webServer->on("/comm_test", HTTP_POST, [this]() {
+                    try { handleCommTest(); }
+                    catch (...) { _webServer->send(500, "text/plain", "Test failed"); }
+                });
+
+                // Add a health check endpoint
+                _webServer->on("/health", HTTP_GET, [this]() {
+                    _webServer->send(200, "application/json",
+                                     "{\"status\":\"ok\",\"uptime\":" + String(millis()) +
+                                     ",\"heap\":" + String(ESP.getFreeHeap()) + "}");
+                });
+
+                // Handle 404 errors
+                _webServer->onNotFound([this]() {
+                    _webServer->send(404, "text/html",
+                                     "<h1>404 Not Found</h1><p><a href='/'>Go to main page</a></p>");
+                });
+
+                // Start server with error handling
+                try {
+                    _webServer->begin();
+                    Serial.println("🌍 HTTP server started on port 80");
+                    return true;
+                } catch (...) {
+                    Serial.println("❌ Failed to start HTTP server");
+                    return false;
+                }
+
+            } catch (...) {
+                Serial.println("❌ Exception during web server initialization");
+                return false;
+            }
+        }
+
+        bool ControllerApplication::processMessages() {
+            if (!_commModule || !_commModule->isMessageAvailable()) {
+                return false;
+            }
+
+            uint8_t buffer[256];
+            uint8_t senderNodeId;
+
+            size_t bytesReceived = _commModule->receiveMessage(buffer, sizeof(buffer), senderNodeId);
+            if (bytesReceived == 0) {
+                if (_config.verboseDebugging) {
+                    Serial.println("⚠️  No message received despite isMessageAvailable() == true");
+                }
+                return false;
+            }
+
+            Serial.printf("📨 Received %d bytes from node %d\n", bytesReceived, senderNodeId);
+
+            return handleNodeMessage(buffer, bytesReceived, senderNodeId);
+        }
+
+        void ControllerApplication::processPendingMessages() {
+            if (!_commModule) {
+                return; // No communication module available
+            }
+
+            unsigned long currentTime = millis();
+            bool hasTimeouts = false;
+            int retriesThisCycle = 0;
+            const int maxRetriesPerCycle = 2; // Limit retries per update cycle
+
+            for (auto it = _pendingMessages.begin(); it != _pendingMessages.end(); ) {
+                // Skip if we've already done too many retries this cycle
+                if (retriesThisCycle >= maxRetriesPerCycle) {
+                    ++it;
+                    continue;
+                }
+
+                if (currentTime - it->sentTime > _config.messageTimeout) {
+                    hasTimeouts = true;
+
+                    if (it->retryCount < _config.maxRetryCount) {
+                        // Retry sending the message with exponential backoff
+                        unsigned long backoffDelay = 1000 * (1 << it->retryCount); // 1s, 2s, 4s, 8s...
+                        backoffDelay = std::min(backoffDelay, 10000UL); // Max 10 seconds
+
+                        if (currentTime - it->firstSentTime > backoffDelay) {
+                            Serial.printf("🔄 Retrying message to node %d (seq %d, attempt %d/%d) - %s\n",
+                                          it->nodeId, it->sequenceNum, it->retryCount+1, _config.maxRetryCount,
+                                          it->commandDescription.c_str());
+
+                            try {
+                                if (_commModule->sendMessage(it->nodeId, it->messageData.data(), it->messageData.size())) {
+                                    it->sentTime = currentTime;
+                                    it->retryCount++;
+                                    _commStats.totalRetries++;
+                                    retriesThisCycle++;
+                                    Serial.printf("✅ Retry sent successfully\n");
+                                    ++it;
+                                } else {
+                                    Serial.printf("❌ Failed to retry message to node %d (seq %d)\n",
+                                                  it->nodeId, it->sequenceNum);
+                                    _commStats.totalErrors++;
+
+                                    // Update node stats
+                                    if (_nodeStatus.find(it->nodeId) != _nodeStatus.end()) {
+                                        _nodeStatus[it->nodeId].failedCommands++;
+                                        _nodeStatus[it->nodeId].lastCommandSuccess = false;
+                                    }
+
+                                    it = _pendingMessages.erase(it);
+                                }
+                            } catch (...) {
+                                Serial.printf("❌ Exception during retry to node %d - removing message\n", it->nodeId);
+                                it = _pendingMessages.erase(it);
+                            }
+                        } else {
+                            ++it; // Not time for retry yet
+                        }
+                    } else {
+                        // Max retry count exceeded
+                        Serial.printf("💀 Message to node %d FAILED after %d attempts (seq %d) - %s\n",
+                                      it->nodeId, _config.maxRetryCount, it->sequenceNum,
+                                      it->commandDescription.c_str());
+
+                        _commStats.totalTimeouts++;
+
+                        // Update node stats
+                        if (_nodeStatus.find(it->nodeId) != _nodeStatus.end()) {
+                            _nodeStatus[it->nodeId].failedCommands++;
+                            _nodeStatus[it->nodeId].lastCommandSuccess = false;
+                        }
+
+                        it = _pendingMessages.erase(it);
+                    }
+                } else {
+                    ++it;
+                }
+            }
+
+            // Log pending messages status less frequently
+            static unsigned long lastPendingLog = 0;
+            if (!_pendingMessages.empty() && currentTime - lastPendingLog > 15000) {
+                Serial.printf("⏳ %d messages pending (oldest: %lu ms ago)\n",
+                              _pendingMessages.size(),
+                              _pendingMessages.empty() ? 0 : currentTime - _pendingMessages[0].firstSentTime);
+                lastPendingLog = currentTime;
+            }
+        }
+
+        bool ControllerApplication::sendCommandMessage(uint8_t nodeId, Command command,
+                                                       const uint8_t* data, size_t dataLength,
+                                                       const String& description) {
+            if (!_initialized || !_commModule) {
+                Serial.println("❌ Cannot send command: system not initialized");
+                return false;
+            }
+
+            // Prepare command message
+            CommandMessage cmdMsg;
+            cmdMsg.header.version = 1;
+            cmdMsg.header.type = MessageType::COMMAND;
+            cmdMsg.header.nodeId = nodeId;
+            cmdMsg.header.sequenceNum = _messageSequence++;
+            cmdMsg.header.payloadLength = sizeof(Command) + dataLength;
+            cmdMsg.header.timestamp = millis();
+            cmdMsg.command = command;
+
+            // Copy data if provided
+            if (data && dataLength > 0) {
+                size_t copyLength = std::min(dataLength, sizeof(cmdMsg.data));
+                memcpy(cmdMsg.data, data, copyLength);
+
+                if (_config.verboseDebugging && dataLength <= 4) {
+                    Serial.printf("📦 Command data: ");
+                    for (size_t i = 0; i < copyLength; i++) {
+                        Serial.printf("0x%02X ", cmdMsg.data[i]);
+                    }
+                    Serial.println();
+                }
+            }
+
+            // Compute header checksum
+            cmdMsg.header.setChecksum();
+
+            String cmdName = "";
+            switch (command) {
+                case Command::SET_VOLUME: cmdName = "SET_VOLUME"; break;
+                case Command::SET_FREQUENCY: cmdName = "SET_FREQUENCY"; break;
+                case Command::TOGGLE_RELAY: cmdName = "TOGGLE_RELAY"; break;
+                case Command::MUTE: cmdName = "MUTE"; break;
+                case Command::UNMUTE: cmdName = "UNMUTE"; break;
+                case Command::RESET: cmdName = "RESET"; break;
+                case Command::GET_STATUS: cmdName = "GET_STATUS"; break;
+                default: cmdName = "UNKNOWN"; break;
+            }
+
+            Serial.printf("📤 Sending %s command to node %d (seq %d)\n",
+                          cmdName.c_str(), nodeId, cmdMsg.header.sequenceNum);
+
+            if (_config.verboseDebugging) {
+                logMessageDetails("SENDING", nodeId, cmdName, &cmdMsg,
+                                  sizeof(MessageHeader) + sizeof(Command) + dataLength);
+            }
+
+            // Send message
+            size_t totalSize = sizeof(MessageHeader) + sizeof(Command) + dataLength;
+            if (_commModule->sendMessage(nodeId, &cmdMsg, totalSize)) {
+                _commStats.totalMessagesSent++;
+
+                // Add to pending messages list for retry handling
+                PendingMessage pending;
+                pending.sequenceNum = cmdMsg.header.sequenceNum;
+                pending.nodeId = nodeId;
+                pending.sentTime = millis();
+                pending.firstSentTime = pending.sentTime;
+                pending.retryCount = 0;
+                pending.commandDescription = description.length() > 0 ? description :
+                                             (cmdName + " to node " + String(nodeId));
+
+                // Copy message data
+                pending.messageData.resize(totalSize);
+                memcpy(pending.messageData.data(), &cmdMsg, totalSize);
+
+                _pendingMessages.push_back(pending);
+
+                // Update node stats
+                if (_nodeStatus.find(nodeId) != _nodeStatus.end()) {
+                    _nodeStatus[nodeId].totalCommands++;
+                    _nodeStatus[nodeId].lastCommandTime = millis();
+                    _nodeStatus[nodeId].lastCommand = pending.commandDescription;
+                }
+
+                Serial.printf("✅ Command queued successfully (%d pending total)\n",
+                              _pendingMessages.size());
+                return true;
+            }
+
+            Serial.printf("❌ Failed to send %s command to node %d\n", cmdName.c_str(), nodeId);
+            _commStats.totalErrors++;
+            return false;
+        }
+
+        // Enhanced web interface handlers
+
+        void ControllerApplication::handleRoot() {
+            Serial.println("🌐 Web request: GET / (Main Interface)");
+
+            String html = "<!DOCTYPE html><html><head><title>SzogFM Controller</title>";
+            html += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
+            html += "<style>";
+            html += "body { font-family: Arial, sans-serif; margin: 20px; background: #f0f0f0; }";
+            html += ".container { max-width: 1200px; margin: 0 auto; background: white; padding: 20px; border-radius: 10px; }";
+            html += ".status { padding: 10px; margin: 10px 0; border-radius: 5px; }";
+            html += ".good { background: #d4edda; border: 1px solid #c3e6cb; }";
+            html += ".warning { background: #fff3cd; border: 1px solid #ffeaa7; }";
+            html += ".error { background: #f8d7da; border: 1px solid #f5c6cb; }";
+            html += ".button { background: #007bff; color: white; padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; margin: 5px; }";
+            html += ".button:hover { background: #0056b3; }";
+            html += ".stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin: 20px 0; }";
+            html += ".stat-card { background: #f8f9fa; padding: 15px; border-radius: 5px; border-left: 4px solid #007bff; }";
+            html += "h1 { color: #333; } h2 { color: #666; } .refresh { font-size: 0.8em; color: #666; }";
+            html += "</style></head><body>";
+
+            html += "<div class='container'>";
+            html += "<h1>🎵 SzögFM Controller Dashboard</h1>";
+
+            // System Status
+            html += "<div class='status " + String(_commModule ? "good" : "error") + "'>";
+            html += "<h2>📡 System Status</h2>";
+            html += "<p><strong>Communication Module:</strong> " + String(_commModule ? "✅ Active" : "❌ Disabled") + "</p>";
+            html += "<p><strong>Free Memory:</strong> " + String(ESP.getFreeHeap()) + " bytes</p>";
+            html += "<p><strong>Uptime:</strong> " + String(millis() / 1000) + " seconds</p>";
+            html += "<p><strong>Pending Messages:</strong> " + String(_pendingMessages.size()) + "</p>";
+            html += "</div>";
+
+            // Communication Statistics
+            html += "<div class='stats'>";
+            html += "<div class='stat-card'>";
+            html += "<h3>📤 Messages Sent</h3>";
+            html += "<p style='font-size: 2em; margin: 0;'>" + String(_commStats.totalMessagesSent) + "</p>";
+            html += "</div>";
+            html += "<div class='stat-card'>";
+            html += "<h3>📥 Messages Received</h3>";
+            html += "<p style='font-size: 2em; margin: 0;'>" + String(_commStats.totalMessagesReceived) + "</p>";
+            html += "</div>";
+            html += "<div class='stat-card'>";
+            html += "<h3>✅ Success Rate</h3>";
+            html += "<p style='font-size: 2em; margin: 0;'>" + String(_commStats.messageSuccessRate, 1) + "%</p>";
+            html += "</div>";
+            html += "<div class='stat-card'>";
+            html += "<h3>🔄 Retries</h3>";
+            html += "<p style='font-size: 2em; margin: 0;'>" + String(_commStats.totalRetries) + "</p>";
+            html += "</div>";
+            html += "</div>";
+
+            // Control Panel
+            html += "<h2>🎛️ Control Panel</h2>";
+            html += "<button class='button' onclick=\"fetch('/discover_nodes', {method: 'POST'}).then(() => location.reload())\">🔍 Discover Nodes</button>";
+            html += "<button class='button' onclick=\"fetch('/reset_stats', {method: 'POST'}).then(() => location.reload())\">📊 Reset Stats</button>";
+            html += "<button class='button' onclick=\"fetch('/comm_test', {method: 'POST'}).then(() => alert('Communication test performed'))\">🧪 Test Communication</button>";
+            html += "<button class='button' onclick=\"location.reload()\">🔄 Refresh</button>";
+
+            // Quick Actions
+            html += "<h2>⚡ Quick Actions</h2>";
+            html += "<div style='margin: 10px 0;'>";
+            html += "<input type='number' id='volumeInput' placeholder='Volume (0-15)' min='0' max='15' style='padding: 8px; margin-right: 10px;'>";
+            html += "<button class='button' onclick=\"setAllVolume()\">🔊 Set All Volume</button>";
+            html += "</div>";
+            html += "<div style='margin: 10px 0;'>";
+            html += "<input type='number' id='freqInput' placeholder='Frequency (8750-10800)' min='8750' max='10800' style='padding: 8px; margin-right: 10px;'>";
+            html += "<button class='button' onclick=\"setAllFrequency()\">📻 Set All Frequency</button>";
+            html += "</div>";
+            html += "<button class='button' onclick=\"setAllMute(true)\">🔇 Mute All</button>";
+            html += "<button class='button' onclick=\"setAllMute(false)\">🔊 Unmute All</button>";
+            html += "<button class='button' onclick=\"setAllRelay(true)\">🔌 Power On All</button>";
+            html += "<button class='button' onclick=\"setAllRelay(false)\">⚡ Power Off All</button>";
+
+            // Node Status (if any nodes are known)
+            if (!_nodeStatus.empty()) {
+                html += "<h2>📡 Node Status</h2>";
+                html += "<div style='display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 10px;'>";
+
+                for (const auto& pair : _nodeStatus) {
+                    const NodeStatus& status = pair.second;
+                    String statusClass = status.isConnected ? "good" : "error";
+
+                    html += "<div class='status " + statusClass + "'>";
+                    html += "<h3>Node " + String(status.nodeId) + "</h3>";
+                    html += "<p><strong>Status:</strong> " + String(status.isConnected ? "✅ Connected" : "❌ Disconnected") + "</p>";
+                    if (status.isConnected) {
+                        html += "<p><strong>Frequency:</strong> " + String(status.frequency / 100.0, 1) + " MHz</p>";
+                        html += "<p><strong>Volume:</strong> " + String(status.volume) + "/15</p>";
+                        html += "<p><strong>Muted:</strong> " + String(status.muted ? "Yes" : "No") + "</p>";
+                        html += "<p><strong>Relay:</strong> " + String(status.relayState ? "ON" : "OFF") + "</p>";
+                    }
+                    html += "</div>";
+                }
+                html += "</div>";
+            }
+
+            // API Information
+            html += "<h2>🔗 API Endpoints</h2>";
+            html += "<ul>";
+            html += "<li>GET /status - Node status JSON</li>";
+            html += "<li>GET /detailed_status - Detailed system status</li>";
+            html += "<li>POST /set_volume?node_id=X&volume=Y - Set node volume</li>";
+            html += "<li>POST /set_frequency?node_id=X&frequency=Y - Set node frequency</li>";
+            html += "<li>POST /discover_nodes - Discover nodes</li>";
+            html += "</ul>";
+
+            html += "<div class='refresh'>Page will auto-refresh every 30 seconds</div>";
+
+            html += "</div>";
+
+            // JavaScript for functionality
+            html += "<script>";
+            html += "function setAllVolume() {";
+            html += "  const vol = document.getElementById('volumeInput').value;";
+            html += "  if (vol >= 0 && vol <= 15) {";
+            html += "    fetch('/set_volume?node_id=0&volume=' + vol, {method: 'POST'})";
+            html += "      .then(() => alert('Volume command sent to all nodes'));";
+            html += "  } else alert('Volume must be 0-15');";
+            html += "}";
+            html += "function setAllFrequency() {";
+            html += "  const freq = document.getElementById('freqInput').value;";
+            html += "  if (freq >= 8750 && freq <= 10800) {";
+            html += "    fetch('/set_frequency?node_id=0&frequency=' + freq, {method: 'POST'})";
+            html += "      .then(() => alert('Frequency command sent to all nodes'));";
+            html += "  } else alert('Frequency must be 8750-10800');";
+            html += "}";
+            html += "function setAllMute(mute) {";
+            html += "  fetch('/set_mute?node_id=0&mute=' + (mute ? '1' : '0'), {method: 'POST'})";
+            html += "    .then(() => alert((mute ? 'Mute' : 'Unmute') + ' command sent to all nodes'));";
+            html += "}";
+            html += "function setAllRelay(state) {";
+            html += "  fetch('/set_relay?node_id=0&state=' + (state ? '1' : '0'), {method: 'POST'})";
+            html += "    .then(() => alert('Relay ' + (state ? 'ON' : 'OFF') + ' command sent to all nodes'));";
+            html += "}";
+            html += "setTimeout(() => location.reload(), 30000);"; // Auto-refresh
+            html += "</script>";
+
+            html += "</body></html>";
+
+            _webServer->send(200, "text/html", html);
+        }
+
+        void ControllerApplication::handleStatus() {
+            if (_config.verboseDebugging) {
+                Serial.println("🌐 Web request: GET /status");
+            }
+
+            DynamicJsonDocument doc(4096);
+            JsonArray nodesArray = doc.createNestedArray("nodes");
+
+            int nodeCount = 0;
+            for (const auto& pair : _nodeStatus) {
+                const NodeStatus& status = pair.second;
+                nodeCount++;
+
+                JsonObject nodeObj = nodesArray.createNestedObject();
+                nodeObj["id"] = status.nodeId;
+                nodeObj["connected"] = status.isConnected;
+                nodeObj["frequency"] = status.frequency;
+                nodeObj["volume"] = status.volume;
+                nodeObj["muted"] = status.muted;
+                nodeObj["relay"] = status.relayState;
+                nodeObj["rssi"] = status.rssi;
+                nodeObj["stereo"] = status.isStereo;
+                nodeObj["uptime"] = status.uptime;
+                nodeObj["last_seen"] = millis() - status.lastSeenTime;
+
+                if (status.hasSensors) {
+                    nodeObj["has_sensors"] = true;
+                    nodeObj["temperature"] = status.temperature;
+                    nodeObj["humidity"] = status.humidity;
+                } else {
+                    nodeObj["has_sensors"] = false;
+                }
+
+                if (!status.errorMessage.isEmpty()) {
+                    nodeObj["error"] = status.errorMessage;
+                }
+            }
+
+            String jsonResponse;
+            serializeJson(doc, jsonResponse);
+
+            _webServer->send(200, "application/json", jsonResponse);
+
+            if (_config.verboseDebugging) {
+                Serial.printf("✅ Status sent for %d nodes\n", nodeCount);
+            }
+        }
+
+        // Stub implementations for remaining web handlers
+        void ControllerApplication::handleDetailedStatus() {
+            String response = getDetailedSystemStatus();
+            _webServer->send(200, "application/json", response);
+        }
+
+        void ControllerApplication::handleCommStats() {
+            DynamicJsonDocument doc(1024);
+            doc["total_sent"] = _commStats.totalMessagesSent;
+            doc["total_received"] = _commStats.totalMessagesReceived;
+            doc["success_rate"] = _commStats.messageSuccessRate;
+            doc["pending_messages"] = _pendingMessages.size();
+
+            String response;
+            serializeJson(doc, response);
+            _webServer->send(200, "application/json", response);
+        }
+
+        void ControllerApplication::handleSetVolume() {
+            if (!_webServer->hasArg("node_id") || !_webServer->hasArg("volume")) {
+                _webServer->send(400, "text/plain", "Missing parameters");
+                return;
+            }
+            uint8_t nodeId = _webServer->arg("node_id").toInt();
+            uint8_t volume = _webServer->arg("volume").toInt();
+            bool success = setNodeVolume(nodeId, volume);
+            _webServer->send(success ? 200 : 500, "text/plain", success ? "OK" : "Failed");
+        }
+
+        void ControllerApplication::handleSetFrequency() {
+            if (!_webServer->hasArg("node_id") || !_webServer->hasArg("frequency")) {
+                _webServer->send(400, "text/plain", "Missing parameters");
+                return;
+            }
+            uint8_t nodeId = _webServer->arg("node_id").toInt();
+            uint16_t frequency = _webServer->arg("frequency").toInt();
+            bool success = setNodeFrequency(nodeId, frequency);
+            _webServer->send(success ? 200 : 500, "text/plain", success ? "OK" : "Failed");
+        }
+
+        void ControllerApplication::handleSetRelay() {
+            if (!_webServer->hasArg("node_id") || !_webServer->hasArg("state")) {
+                _webServer->send(400, "text/plain", "Missing parameters");
+                return;
+            }
+            uint8_t nodeId = _webServer->arg("node_id").toInt();
+            bool state = _webServer->arg("state").toInt() != 0;
+            bool success = setNodeRelayState(nodeId, state);
+            _webServer->send(success ? 200 : 500, "text/plain", success ? "OK" : "Failed");
+        }
+
+        void ControllerApplication::handleSetMute() {
+            if (!_webServer->hasArg("node_id") || !_webServer->hasArg("mute")) {
+                _webServer->send(400, "text/plain", "Missing parameters");
+                return;
+            }
+            uint8_t nodeId = _webServer->arg("node_id").toInt();
+            bool mute = _webServer->arg("mute").toInt() != 0;
+            bool success = setNodeMute(nodeId, mute);
+            _webServer->send(success ? 200 : 500, "text/plain", success ? "OK" : "Failed");
+        }
+
+        void ControllerApplication::handleDiscoverNodes() {
+            int discovered = discoverNodes();
+            _webServer->send(200, "text/plain", "Discovery initiated for " + String(discovered) + " nodes");
+        }
+
+        void ControllerApplication::handleResetStats() {
+            resetCommunicationStats();
+            _webServer->send(200, "text/plain", "Statistics reset");
+        }
+
+        void ControllerApplication::handleCommTest() {
+            if (_commModule) {
+                _commModule->performDiagnostics();
+                _webServer->send(200, "text/plain", "Communication test performed");
+            } else {
+                _webServer->send(500, "text/plain", "Communication module not available");
+            }
+        }
+
+        // Additional helper methods (simplified for compilation)
+        bool ControllerApplication::handleNodeMessage(const void* message, size_t length, uint8_t senderNodeId) {
+            // Basic message handling - full implementation would handle different message types
+            Serial.printf("📨 Handling message from node %d (%d bytes)\n", senderNodeId, length);
+            return true;
+        }
+
+        void ControllerApplication::updateNodeConnectionStatus() {
+            // Update connection status based on timeouts
+            unsigned long currentTime = millis();
+            for (auto& pair : _nodeStatus) {
+                NodeStatus& status = pair.second;
+                if (status.isConnected && currentTime - status.lastSeenTime > 120000) { // 2 minutes
+                    status.isConnected = false;
+                }
+            }
+        }
+
+        void ControllerApplication::logMessageDetails(const String& direction, uint8_t nodeId,
+                                                      const String& messageType, const void* message, size_t length) {
+            if (!_config.verboseDebugging) return;
+            Serial.printf("📋 %s %s to/from node %d (%d bytes)\n",
+                          direction.c_str(), messageType.c_str(), nodeId, length);
+        }
+
+        void ControllerApplication::updateCommStats(bool success, unsigned long responseTime) {
+            if (success) {
+                _commStats.totalMessagesReceived++;
+                if (responseTime > 0) {
+                    _commStats.totalResponseTime += responseTime;
+                    _commStats.averageResponseTime = (float)_commStats.totalResponseTime / _commStats.totalMessagesReceived;
+
+                    if (responseTime < _commStats.minimumResponseTime) {
+                        _commStats.minimumResponseTime = responseTime;
+                    }
+                    if (responseTime > _commStats.peakResponseTime) {
+                        _commStats.peakResponseTime = responseTime;
+                    }
+                }
+            } else {
+                _commStats.totalErrors++;
+            }
+
+            // Calculate success rate
+            unsigned long totalAttempts = _commStats.totalMessagesSent;
+            if (totalAttempts > 0) {
+                _commStats.messageSuccessRate = (float)_commStats.totalMessagesReceived / totalAttempts * 100.0f;
+            }
+        }
+
+    } // namespace controller
+} // namespace szogfm

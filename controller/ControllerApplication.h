@@ -230,7 +230,7 @@ namespace szogfm {
              * Get communication statistics
              * @return Reference to communication statistics structure
              */
-            const CommunicationStats& getCommunicationStats() const { return _commStats; }
+            const CommunicationStats& getCommunicationStats() const;
 
             /**
              * Reset communication statistics to zero
@@ -262,6 +262,14 @@ namespace szogfm {
             int discoverNodes();
 
             /**
+             * Force discovery of new nodes with limit
+             * Broadcasts status requests to a limited number of node IDs
+             * @param maxNodes Maximum number of nodes to discover (1-20)
+             * @return Number of discovery requests sent
+             */
+            int discoverNodes(int maxNodes);
+
+            /**
              * Test communication with a specific node
              * @param nodeId Node ID to test communication with
              * @return true if communication test was initiated successfully
@@ -276,7 +284,7 @@ namespace szogfm {
              * Get current controller configuration
              * @return Reference to configuration structure
              */
-            const ControllerConfig& getConfiguration() const { return _config; }
+            const ControllerConfig& getConfiguration() const;
 
             /**
              * Update controller configuration
@@ -296,10 +304,6 @@ namespace szogfm {
              * @param level Debug level (0=off, 1=basic, 2=verbose with hex dumps)
              */
             void setCommunicationDebugLevel(uint8_t level);
-
-            // ===========================================
-            // MESSAGE HANDLING METHODS
-            // ===========================================
 
             /**
              * Handle a received message from a node
@@ -457,6 +461,16 @@ namespace szogfm {
             void handleTestNode();                        // Communication test API
             void handleResetStats();                      // Statistics reset API
             void handleCommTest();                        // Communication diagnostics API
+
+            /**
+             * Handle recovery web interface root page
+             */
+            void handleRecoveryRoot();
+
+            /**
+             * Handle recovery status JSON endpoint
+             */
+            void handleRecoveryStatus();
         };
 
     } // namespace controller
