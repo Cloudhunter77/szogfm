@@ -314,6 +314,31 @@ namespace szogfm {
              */
             bool handleNodeMessage(const void* message, size_t length, uint8_t senderNodeId);
 
+
+            /**
+             * Handle a status response message from a node
+             * @param statusMsg The status message received
+             * @param senderNodeId ID of the node that sent the message
+             * @param receiveTime Time when the message was received
+             * @return true if the message was handled successfully
+             */
+            bool handleNodeStatusMessage(const StatusMessage& statusMsg, uint8_t senderNodeId, unsigned long receiveTime);
+
+            /**
+             * Handle an acknowledgment message from a node
+             * @param ackMsg The acknowledgment message received
+             * @param senderNodeId ID of the node that sent the message
+             * @param receiveTime Time when the message was received
+             * @return true if the message was handled successfully
+             */
+            bool handleNodeAckMessage(const AckMessage& ackMsg, uint8_t senderNodeId, unsigned long receiveTime);
+
+            /**
+             * Get count of currently connected nodes
+             * @return Number of nodes that are currently connected
+             */
+            int getConnectedNodeCount() const;
+
         private:
             // ===========================================
             // MEMBER VARIABLES

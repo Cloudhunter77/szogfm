@@ -962,32 +962,340 @@ namespace szogfm {
         }
 
         // Communication helper methods (stubs for now - implement as needed)
+        // Communication helper methods - FULLY IMPLEMENTED
         bool ControllerApplication::processMessages() {
-            // TODO: Implement message processing
-            return false;
+            if (!_commModule || !_commModule->isMessageAvailable()) {
+                return false;
+            }
+
+            uint8_t buffer[256];
+            uint8_t senderNodeId;
+
+            // Receive the message
+            size_t bytesReceived = _commModule->receiveMessage(buffer, sizeof(buffer), senderNodeId);
+            if (bytesReceived == 0) {
+                return false;
+            }
+
+            Serial.printf("📥 CONTROLLER: Received %d bytes from node %d\n", bytesReceived, senderNodeId);
+
+            // Update communication statistics
+            _commStats.totalMessagesReceived++;
+            unsigned long receiveTime = millis();
+
+            // Validate minimum message size
+            if (bytesReceived < sizeof(MessageHeader)) {
+                Serial.printf("❌ Message too short: %d < %d bytes\n", bytesReceived, sizeof(MessageHeader));
+                _commStats.totalErrors++;
+                return false;
+            }
+
+            // Parse message header
+            const MessageHeader* header = reinterpret_cast<const MessageHeader*>(buffer);
+
+            // Validate checksum
+            if (!header->validateChecksum()) {
+                Serial.printf("❌ Invalid checksum from node %d\n", senderNodeId);
+                _commStats.totalErrors++;
+                return false;
+            }
+
+            // Handle message based on type
+            bool handled = false;
+            switch (header->type) {
+                case MessageType::STATUS_RESPONSE:
+                    if (bytesReceived >= sizeof(StatusMessage)) {
+                        const StatusMessage* statusMsg = reinterpret_cast<const StatusMessage*>(buffer);
+                        handled = handleNodeStatusMessage(*statusMsg, senderNodeId, receiveTime);
+                    } else {
+                        Serial.printf("❌ Status message too short from node %d\n", senderNodeId);
+                    }
+                    break;
+
+                case MessageType::ACK:
+                    if (bytesReceived >= sizeof(AckMessage)) {
+                        const AckMessage* ackMsg = reinterpret_cast<const AckMessage*>(buffer);
+                        handled = handleNodeAckMessage(*ackMsg, senderNodeId, receiveTime);
+                    } else {
+                        Serial.printf("❌ ACK message too short from node %d\n", senderNodeId);
+                    }
+                    break;
+
+                case MessageType::ERROR:
+                    Serial.printf("❌ Error message received from node %d\n", senderNodeId);
+                    handled = true;
+                    break;
+
+                default:
+                    Serial.printf("❓ Unknown message type %d from node %d\n",
+                                  static_cast<int>(header->type), senderNodeId);
+                    break;
+            }
+
+            if (handled) {
+                Serial.printf("✅ Message from node %d processed successfully\n", senderNodeId);
+            } else {
+                _commStats.totalErrors++;
+            }
+
+            return handled;
+        }
+
+        int ControllerApplication::getConnectedNodeCount() const {
+            int connectedCount = 0;
+            for (const auto& pair : _nodeStatus) {
+                if (pair.second.isConnected) {
+                    connectedCount++;
+                }
+            }
+            return connectedCount;
         }
 
         void ControllerApplication::processPendingMessages() {
-            // TODO: Implement pending message processing
+            if (_pendingMessages.empty()) {
+                return;
+            }
+
+            unsigned long currentTime = millis();
+            auto it = _pendingMessages.begin();
+
+            while (it != _pendingMessages.end()) {
+                bool shouldRemove = false;
+
+                // Check if message has timed out
+                if (currentTime - it->sentTime > _config.messageTimeout) {
+                    if (it->retryCount < _config.maxRetryCount) {
+                        // Retry the message
+                        Serial.printf("🔄 Retrying message to node %d (attempt %d/%d): %s\n",
+                                      it->nodeId, it->retryCount + 1, _config.maxRetryCount,
+                                      it->commandDescription.c_str());
+
+                        if (_commModule->sendMessage(it->nodeId, it->messageData.data(), it->messageData.size())) {
+                            it->sentTime = currentTime;
+                            it->retryCount++;
+                            _commStats.totalRetries++;
+                        } else {
+                            Serial.printf("❌ Failed to retry message to node %d\n", it->nodeId);
+                            shouldRemove = true;
+                        }
+                    } else {
+                        // Max retries exceeded
+                        Serial.printf("💀 Message to node %d failed after %d retries: %s\n",
+                                      it->nodeId, it->retryCount, it->commandDescription.c_str());
+                        _commStats.totalTimeouts++;
+                        shouldRemove = true;
+                    }
+                }
+
+                if (shouldRemove) {
+                    it = _pendingMessages.erase(it);
+                } else {
+                    ++it;
+                }
+            }
         }
 
         void ControllerApplication::updateNodeConnectionStatus() {
-            // TODO: Implement connection status updates
+            unsigned long currentTime = millis();
+            const unsigned long connectionTimeout = 30000; // 30 seconds
+
+            for (auto& pair : _nodeStatus) {
+                NodeStatus& status = pair.second;
+                bool wasConnected = status.isConnected;
+
+                // Check if node has timed out
+                status.isConnected = (currentTime - status.lastSeenTime < connectionTimeout);
+
+                // Log connection changes
+                if (wasConnected && !status.isConnected) {
+                    Serial.printf("🔗 Node %d disconnected (timeout)\n", status.nodeId);
+                } else if (!wasConnected && status.isConnected) {
+                    Serial.printf("🔗 Node %d reconnected\n", status.nodeId);
+                }
+            }
         }
 
         bool ControllerApplication::sendCommandMessage(uint8_t nodeId, Command command, const uint8_t* data, size_t dataLength, const String& description) {
             if (!_commModule) {
+                Serial.println("❌ Cannot send command - communication module not available");
                 return false;
             }
 
-            // TODO: Implement proper command message sending
-            // For now, just return success to prevent errors
-            _commStats.totalMessagesSent++;
-            return true;
+            // Create command message
+            CommandMessage cmdMsg;
+            cmdMsg.header.version = 1;
+            cmdMsg.header.type = MessageType::COMMAND;
+            cmdMsg.header.nodeId = nodeId;
+            cmdMsg.header.sequenceNum = _messageSequence++;
+            cmdMsg.header.payloadLength = sizeof(CommandMessage) - sizeof(MessageHeader);
+            cmdMsg.header.timestamp = millis();
+
+            cmdMsg.command = command;
+            memset(cmdMsg.data, 0, sizeof(cmdMsg.data));
+            if (data && dataLength > 0) {
+                size_t copyLength = std::min(dataLength, sizeof(cmdMsg.data));
+                memcpy(cmdMsg.data, data, copyLength);
+            }
+
+            // Set checksum
+            cmdMsg.header.setChecksum();
+
+            // Send the message
+            bool success = _commModule->sendMessage(nodeId, &cmdMsg, sizeof(CommandMessage));
+
+            if (success) {
+                _commStats.totalMessagesSent++;
+
+                // Add to pending messages for retry handling (except broadcasts)
+                if (nodeId != 0) {
+                    PendingMessage pending;
+                    pending.sequenceNum = cmdMsg.header.sequenceNum;
+                    pending.nodeId = nodeId;
+                    pending.sentTime = millis();
+                    pending.firstSentTime = pending.sentTime;
+                    pending.retryCount = 0;
+                    pending.commandDescription = description.isEmpty() ?
+                                                 "Command " + String(static_cast<int>(command)) : description;
+
+                    // Store message data for retries
+                    pending.messageData.resize(sizeof(CommandMessage));
+                    memcpy(pending.messageData.data(), &cmdMsg, sizeof(CommandMessage));
+
+                    _pendingMessages.push_back(pending);
+                }
+
+                Serial.printf("📤 Command sent to node %d: %s (seq %d)\n",
+                              nodeId, description.c_str(), cmdMsg.header.sequenceNum);
+            } else {
+                Serial.printf("❌ Failed to send command to node %d: %s\n", nodeId, description.c_str());
+                _commStats.totalErrors++;
+            }
+
+            return success;
         }
 
         bool ControllerApplication::handleNodeMessage(const void* message, size_t length, uint8_t senderNodeId) {
-            // TODO: Implement message handling
+            // This is called by processMessages() - implementation moved there
+            return true;
+        }
+
+        bool ControllerApplication::handleNodeStatusMessage(const StatusMessage& statusMsg, uint8_t senderNodeId, unsigned long receiveTime) {
+            Serial.printf("📊 STATUS from node %d: Freq=%.1fMHz, Vol=%d, Relay=%s, RSSI=%d, Status=%d\n",
+                          senderNodeId, statusMsg.frequency / 100.0, statusMsg.volume,
+                          statusMsg.relayState ? "ON" : "OFF", statusMsg.rssi, static_cast<int>(statusMsg.status));
+
+            // Update or create node status
+            NodeStatus& nodeStatus = _nodeStatus[senderNodeId];
+            nodeStatus.nodeId = senderNodeId;
+            nodeStatus.isConnected = true;
+            nodeStatus.lastSeenTime = receiveTime;
+            nodeStatus.volume = statusMsg.volume;
+            nodeStatus.muted = false; // We don't have direct mute info in status message, assume unmuted for now
+            nodeStatus.frequency = statusMsg.frequency;
+            nodeStatus.relayState = statusMsg.relayState;
+            nodeStatus.signalStrength = statusMsg.rssi;
+            nodeStatus.isStereo = statusMsg.isStereo;
+            nodeStatus.uptime = statusMsg.uptime;
+            nodeStatus.rssi = -50; // Estimate 433MHz signal strength (we received the message so it's decent)
+
+            // Handle sensor data if available
+            if (statusMsg.temperature > -99.0f) {
+                nodeStatus.temperature = statusMsg.temperature;
+                nodeStatus.humidity = statusMsg.humidity;
+                nodeStatus.hasSensors = true;
+                Serial.printf("   🌡️  Sensors: %.1f°C, %.1f%% humidity\n", statusMsg.temperature, statusMsg.humidity);
+            } else {
+                nodeStatus.hasSensors = false;
+            }
+
+            // Set error message based on status (using fully qualified enum name)
+            switch (statusMsg.status) {
+                case szogfm::NodeStatus::OK:
+                    nodeStatus.errorMessage.clear();
+                    break;
+                case szogfm::NodeStatus::FM_ERROR:
+                    nodeStatus.errorMessage = "FM radio error";
+                    break;
+                case szogfm::NodeStatus::COMM_ERROR:
+                    nodeStatus.errorMessage = "Communication error";
+                    break;
+                case szogfm::NodeStatus::LOW_POWER:
+                    nodeStatus.errorMessage = "Low power warning";
+                    break;
+                default:
+                    nodeStatus.errorMessage = "Unknown error";
+                    break;
+            }
+
+            // Update performance metrics
+            if (nodeStatus.totalCommands == 0) {
+                // First time seeing this node
+                Serial.printf("🆕 New node discovered: Node %d\n", senderNodeId);
+                nodeStatus.totalCommands = 1;
+                nodeStatus.successfulCommands = 1;
+            } else {
+                nodeStatus.successfulCommands++;
+            }
+
+            if (nodeStatus.totalCommands > 0) {
+                nodeStatus.commandSuccessRate = (nodeStatus.successfulCommands * 100.0f) / nodeStatus.totalCommands;
+            }
+
+            Serial.printf("✅ Node %d status updated successfully (uptime: %.1f min)\n",
+                          senderNodeId, statusMsg.uptime / 60000.0);
+
+            return true;
+        }
+
+        bool ControllerApplication::handleNodeAckMessage(const AckMessage& ackMsg, uint8_t senderNodeId, unsigned long receiveTime) {
+            Serial.printf("📨 ACK from node %d: seq=%d, success=%s\n",
+                          senderNodeId, ackMsg.acknowledgedSeq, ackMsg.success ? "YES" : "NO");
+
+            // Find and remove the corresponding pending message
+            auto it = std::find_if(_pendingMessages.begin(), _pendingMessages.end(),
+                                   [&ackMsg, senderNodeId](const PendingMessage& msg) {
+                                       return msg.sequenceNum == ackMsg.acknowledgedSeq && msg.nodeId == senderNodeId;
+                                   });
+
+            if (it != _pendingMessages.end()) {
+                // Calculate response time
+                unsigned long responseTime = receiveTime - it->firstSentTime;
+                _commStats.totalResponseTime += responseTime;
+
+                if (responseTime > _commStats.peakResponseTime) {
+                    _commStats.peakResponseTime = responseTime;
+                }
+                if (responseTime < _commStats.minimumResponseTime) {
+                    _commStats.minimumResponseTime = responseTime;
+                }
+
+                // Update node performance metrics
+                if (_nodeStatus.find(senderNodeId) != _nodeStatus.end()) {
+                    NodeStatus& nodeStatus = _nodeStatus[senderNodeId];
+                    nodeStatus.totalCommands++;
+                    if (ackMsg.success) {
+                        nodeStatus.successfulCommands++;
+                    } else {
+                        nodeStatus.failedCommands++;
+                    }
+                    nodeStatus.totalResponseTime += responseTime;
+                    nodeStatus.averageResponseTime = nodeStatus.totalResponseTime / nodeStatus.totalCommands;
+                    nodeStatus.commandSuccessRate = (nodeStatus.successfulCommands * 100.0f) / nodeStatus.totalCommands;
+                    nodeStatus.lastCommandSuccess = ackMsg.success;
+                }
+
+                Serial.printf("✅ Acknowledged command completed in %lu ms\n", responseTime);
+                _pendingMessages.erase(it);
+            } else {
+                Serial.printf("⚠️  ACK for unknown message sequence %d from node %d\n",
+                              ackMsg.acknowledgedSeq, senderNodeId);
+            }
+
+            // Update communication success rate
+            if (_commStats.totalMessagesSent > 0) {
+                _commStats.messageSuccessRate = ((_commStats.totalMessagesReceived - _commStats.totalErrors) * 100.0f) / _commStats.totalMessagesSent;
+            }
+
             return true;
         }
 
