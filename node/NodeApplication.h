@@ -5,8 +5,14 @@
 #include "../common/NodeConfig.h"
 #include "../common/communication/EbyteCommModule.h"
 #include "../common/radio/RDA5807Radio.h"
-#include "../common/display/SSD1306Display.h"
 #include "../common/input/ButtonHandler.h"
+
+// Forward declaration
+namespace szogfm {
+    namespace node {
+        class SimpleNodeStatus;
+    }
+}
 
 namespace szogfm {
     namespace node {
@@ -21,7 +27,6 @@ namespace szogfm {
             unsigned long failedCommands;
             unsigned long totalStatusRequests;
             unsigned long totalButtonPresses;
-            unsigned long totalDisplayUpdates;
             unsigned long lastRadioUpdate;
             unsigned long lastCommTest;
             float commandSuccessRate;
@@ -50,8 +55,15 @@ namespace szogfm {
         };
 
 /**
- * Node application class for SzogFM project
- * This class integrates all components and manages the node functionality
+ * Node application class for SzogFM project - No Display Version
+ * This class integrates FM radio and 433MHz communication without OLED display
+ *
+ * Core functionality:
+ * - FM radio control (frequency, volume, mute)
+ * - 433MHz communication with central controller
+ * - Local button control
+ * - Relay control for speaker power
+ * - Status reporting and monitoring
  */
         class NodeApplication {
         public:
@@ -118,7 +130,7 @@ namespace szogfm {
 
             /**
              * Get detailed system status for debugging
-             * @return JSON string with detailed status
+             * @return String with detailed status (instead of JSON for simplicity)
              */
             String getDetailedSystemStatus() const;
 
@@ -128,19 +140,41 @@ namespace szogfm {
              */
             bool testHardwareComponents();
 
+            /**
+             * Get current FM frequency
+             * @return Current FM frequency in 10kHz units
+             */
+            uint16_t getCurrentFrequency() const { return _config.getFmFrequency(); }
+
+            /**
+             * Get current volume level
+             * @return Current volume (0-15)
+             */
+            uint8_t getCurrentVolume() const { return _config.getVolume(); }
+
+            /**
+             * Get current mute state
+             * @return true if muted, false otherwise
+             */
+            bool getCurrentMute() const { return _config.isMuted(); }
+
+            /**
+             * Get current relay state
+             * @return true if relay is on, false otherwise
+             */
+            bool getCurrentRelay() const { return _config.getRelayState(); }
+
         private:
-            // Components
+            // Core components - NO DISPLAY
             NodeConfig _config;
             communication::EbyteCommModule* _commModule;
             radio::RDA5807Radio* _radio;
-            display::SSD1306Display* _display;
             input::ButtonHandler* _buttonHandler;
 
             // State variables
             bool _initialized;
             bool _connected;
             unsigned long _lastStatusTime;
-            unsigned long _lastDisplayUpdateTime;
             unsigned long _lastHeartbeatTime;
             unsigned long _lastReceivedMessageTime;
             unsigned long _lastSelfTestTime;
@@ -157,31 +191,25 @@ namespace szogfm {
             // Pin definitions (can be adjusted in constructor)
             int _pinRelayControl;
             int _pinUserButton;
-            int _pinSDASensor;
-            int _pinSCLSensor;
-            int _pinM0;
-            int _pinM1;
-            int _pinAUX;
+            int _pinSDASensor;       // I2C SDA for FM radio only
+            int _pinSCLSensor;       // I2C SCL for FM radio only
+            int _pinM0;              // EBYTE M0 control
+            int _pinM1;              // EBYTE M1 control
+            int _pinAUX;             // EBYTE AUX status
 
             // Constants
             static constexpr unsigned long STATUS_INTERVAL = 5000;        // 5 seconds
-            static constexpr unsigned long DISPLAY_UPDATE_INTERVAL = 250; // 250 ms
             static constexpr unsigned long HEARTBEAT_INTERVAL = 30000;    // 30 seconds
             static constexpr unsigned long CONNECTION_TIMEOUT = 60000;    // 60 seconds
             static constexpr unsigned long SELF_TEST_INTERVAL = 300000;   // 5 minutes
 
             /**
-             * Set up button callbacks
+             * Set up button callbacks for local control
              */
             void setupButtonCallbacks();
 
             /**
-             * Update the display with current state
-             */
-            void updateDisplay();
-
-            /**
-             * Initialize sensors if available
+             * Initialize sensors if available (DHT22)
              * @return true if initialization was successful, false otherwise
              */
             bool initializeSensors();
@@ -197,17 +225,17 @@ namespace szogfm {
             void applyVolume();
 
             /**
-             * Apply relay state
+             * Apply relay state to physical relay
              */
             void applyRelayState();
 
             /**
-             * Check connection status
+             * Check connection status with controller
              */
             void checkConnection();
 
             /**
-             * Process received messages
+             * Process received messages from controller
              * @return true if a message was processed, false otherwise
              */
             bool processMessages();
@@ -261,7 +289,7 @@ namespace szogfm {
             void updateStatistics();
 
             /**
-             * Log detailed message information
+             * Log detailed message information for debugging
              */
             void logMessageDetails(const String& direction, const String& messageType,
                                    const void* message, size_t length);
@@ -294,24 +322,18 @@ namespace szogfm {
             bool testRadio();
 
             /**
-             * Test display functionality
-             * @return true if display is working correctly
-             */
-            bool testDisplay();
-
-            /**
              * Test communication module
              * @return true if communication is working correctly
              */
             bool testCommunication();
 
             /**
-             * Show startup information on display
+             * Show status information via Serial (replaces display)
              */
-            void showStartupInfo();
+            void showCurrentStatus();
 
             /**
-             * Show error information on display
+             * Show error information via Serial (replaces display)
              */
             void showErrorInfo(const String& error);
         };

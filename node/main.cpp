@@ -4,9 +4,6 @@
 #include <WiFi.h>
 #include "NodeApplication.h"
 
-// Enable DHT sensor if available
-// #define ENABLE_DHT_SENSOR
-
 // Create node application instance
 szogfm::node::NodeApplication nodeApp;
 
@@ -17,29 +14,37 @@ void setup() {
     // Wait for serial port to connect
     delay(1000);
 
-    Serial.println("\n\n===========================================");
-    Serial.println("SzogFM Node Application Starting");
-    Serial.println("===========================================\n");
-
     // Disable WiFi and Bluetooth to save power
     btStop();
     WiFi.disconnect();
     WiFi.mode(WIFI_OFF);
 
+    Serial.println("\n\n===========================================");
+    Serial.println("🎵 SzögFM Node Application Starting 🎵");
+    Serial.println("===========================================\n");
+    Serial.printf("⏰ Boot time: %lu ms\n", millis());
+    Serial.printf("🔧 ESP32 Chip ID: %012llX\n", ESP.getEfuseMac());
+    Serial.printf("💾 Free heap: %d bytes\n", ESP.getFreeHeap());
+
     // Initialize the node application
     if (!nodeApp.initialize()) {
-        Serial.println("Failed to initialize node application!");
+        Serial.println("❌ Failed to initialize node application!");
+        Serial.println("🔄 System will continue in safe mode...");
+
+        // Don't halt - continue for troubleshooting
         // Flash the built-in LED to indicate error
         pinMode(2, OUTPUT);
-        while (true) {
+        for (int i = 0; i < 10; i++) {
             digitalWrite(2, HIGH);
-            delay(100);
+            delay(200);
             digitalWrite(2, LOW);
-            delay(100);
+            delay(200);
         }
+    } else {
+        Serial.println("✅ Node application initialized successfully");
+        Serial.println("📻 FM radio and 433MHz communication ready");
+        Serial.println("🎵 Ready for festival operation!");
     }
-
-    Serial.println("Node application initialized successfully");
 }
 
 void loop() {
