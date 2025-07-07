@@ -38,7 +38,7 @@ namespace szogfm {
 
                 // Pin configuration with clear documentation
                   _pinUserButton(34),        // Analog input for resistor network buttons
-                  _pinRelayControl(27),      // Digital output for relay control
+                  _pinRelayControl(5),      // Digital output for relay control
                   _pinSDASensor(21),         // I2C SDA (FM radio only - NO DISPLAY)
                   _pinSCLSensor(22),         // I2C SCL (FM radio only - NO DISPLAY)
                   _pinM0(4),                 // EBYTE M0 control pin
@@ -154,6 +154,7 @@ namespace szogfm {
 
             static unsigned long lastStatusDisplay = 0;
             static unsigned long lastConnectionCheck = 0;
+            static unsigned long lastAnalogMonitor = 0;
             static bool connectionTestActive = false;
             static unsigned long connectionTestStart = 0;
             unsigned long currentTime = millis();
@@ -174,7 +175,23 @@ namespace szogfm {
                 info.lastError = ""; // Clear for now
 
                 SimpleNodeStatus::printStatus(info);
+
+                // Add relay debugging info to status
+                Serial.printf("🔌 RELAY DEBUG: Config=%s, Pin%d=%s\n",
+                              _config.getRelayState() ? "ON" : "OFF",
+                              _pinRelayControl,
+                              digitalRead(_pinRelayControl) ? "HIGH" : "LOW");
+
                 lastStatusDisplay = currentTime;
+            }
+
+            // Monitor analog values for button debugging (every 2 seconds)
+            if (currentTime - lastAnalogMonitor > 2000) {
+                int analogVal = analogRead(_pinUserButton);
+                if (analogVal < 4090) { // Only show if not at max (no button pressed)
+                    Serial.printf("🔘 Analog monitor: %d (Vol-:1200-1500, Freq+:1700-2100, Freq-:2400-2800, Vol+:3800-4095)\n", analogVal);
+                }
+                lastAnalogMonitor = currentTime;
             }
 
             // Connection test logic (first 30 seconds after boot)
@@ -201,14 +218,14 @@ namespace szogfm {
                 lastConnectionCheck = currentTime;
             }
 
-            // Handle button presses
+            // Handle button presses with improved filtering
             if (_buttonHandler->update()) {
                 _stats.totalButtonPresses++;
-                // Only show button press confirmation in simple format
-                Serial.printf("🔘 Button: %s\n",
+                Serial.printf("🔘 Button confirmed: %s (analog: %d)\n",
                               static_cast<int>(_buttonHandler->getLastButtonType()) == 0 ? "VOL+" :
                               static_cast<int>(_buttonHandler->getLastButtonType()) == 1 ? "VOL-" :
-                              static_cast<int>(_buttonHandler->getLastButtonType()) == 2 ? "FREQ+" : "FREQ-");
+                              static_cast<int>(_buttonHandler->getLastButtonType()) == 2 ? "FREQ+" : "FREQ-",
+                              _buttonHandler->getLastAnalogValue());
             }
 
             // Send periodic status updates (less frequent)
@@ -428,32 +445,60 @@ namespace szogfm {
         }
 
         void NodeApplication::setupButtonCallbacks() {
-            // Add buttons with their analog value ranges
-            _buttonHandler->addButton(input::ButtonType::FREQUENCY_UP, 1600, 2200, [this]() {
+            Serial.println("🔘 Setting up button callbacks with IMPROVED analog ranges...");
+
+            // IMPROVED button ranges - narrower windows with better separation
+            // These ranges are more conservative to avoid false triggers
+
+            // Button: Frequency Up (tightened range)
+            int freqUpBtn = _buttonHandler->addButton(input::ButtonType::FREQUENCY_UP, 1700, 2100, [this]() {
+                Serial.println("🔘 [FREQ UP] Button pressed");
                 uint16_t freq = _config.getFmFrequency();
                 uint16_t newFreq = freq + 10; // Increase by 0.1 MHz
                 if (newFreq > 10800) newFreq = 8750; // Wrap around
+                Serial.printf("🔘 [FREQ UP] %d → %d (%.1f MHz)\n", freq, newFreq, newFreq/100.0);
                 processSetFrequencyCommand(newFreq);
             });
 
-            _buttonHandler->addButton(input::ButtonType::FREQUENCY_DOWN, 2300, 2900, [this]() {
+            // Button: Frequency Down (tightened range)
+            int freqDownBtn = _buttonHandler->addButton(input::ButtonType::FREQUENCY_DOWN, 2400, 2800, [this]() {
+                Serial.println("🔘 [FREQ DOWN] Button pressed");
                 uint16_t freq = _config.getFmFrequency();
                 uint16_t newFreq = freq - 10; // Decrease by 0.1 MHz
                 if (newFreq < 8750) newFreq = 10800; // Wrap around
+                Serial.printf("🔘 [FREQ DOWN] %d → %d (%.1f MHz)\n", freq, newFreq, newFreq/100.0);
                 processSetFrequencyCommand(newFreq);
             });
 
-            _buttonHandler->addButton(input::ButtonType::VOLUME_UP, 3700, 4095, [this]() {
+            // Button: Volume Up (tightened range)
+            int volUpBtn = _buttonHandler->addButton(input::ButtonType::VOLUME_UP, 3800, 4095, [this]() {
+                Serial.println("🔘 [VOL UP] Button pressed");
                 uint8_t vol = _config.getVolume();
                 uint8_t newVol = (vol < 15) ? vol + 1 : vol;
+                Serial.printf("🔘 [VOL UP] %d → %d\n", vol, newVol);
                 processSetVolumeCommand(newVol);
             });
 
-            _buttonHandler->addButton(input::ButtonType::VOLUME_DOWN, 1000, 1400, [this]() {
+            // Button: Volume Down (MOVED HIGHER to avoid noise, much tighter range)
+            int volDownBtn = _buttonHandler->addButton(input::ButtonType::VOLUME_DOWN, 1200, 1500, [this]() {
+                Serial.println("🔘 [VOL DOWN] Button pressed");
                 uint8_t vol = _config.getVolume();
                 uint8_t newVol = (vol > 0) ? vol - 1 : vol;
+                Serial.printf("🔘 [VOL DOWN] %d → %d\n", vol, newVol);
                 processSetVolumeCommand(newVol);
             });
+
+            Serial.printf("✅ Button callbacks configured with IMPROVED ranges:\n");
+            Serial.printf("   📈 Freq Up: %s (analog 1700-2100) - TIGHTENED\n", freqUpBtn >= 0 ? "OK" : "FAILED");
+            Serial.printf("   📉 Freq Down: %s (analog 2400-2800) - TIGHTENED\n", freqDownBtn >= 0 ? "OK" : "FAILED");
+            Serial.printf("   🔊 Vol Up: %s (analog 3800-4095) - TIGHTENED\n", volUpBtn >= 0 ? "OK" : "FAILED");
+            Serial.printf("   🔉 Vol Down: %s (analog 1200-1500) - MOVED HIGHER & TIGHTENED\n", volDownBtn >= 0 ? "OK" : "FAILED");
+
+            Serial.println("🔍 Button range improvements:");
+            Serial.println("   • Narrower detection windows (±100-200 instead of ±300-400)");
+            Serial.println("   • Vol- moved higher (1200-1500 vs 1000-1400) to avoid noise");
+            Serial.println("   • Larger gaps between button ranges");
+            Serial.println("   • Should eliminate random Vol- actuation");
         }
 
         bool NodeApplication::processSetVolumeCommand(uint8_t volume) {
@@ -487,8 +532,42 @@ namespace szogfm {
         }
 
         bool NodeApplication::processToggleRelayCommand(bool state) {
+            Serial.printf("🔌 [RELAY DEBUG] Command received: %s\n", state ? "ON" : "OFF");
+            Serial.printf("🔌 [RELAY DEBUG] Pin %d before: %s\n", _pinRelayControl, digitalRead(_pinRelayControl) ? "HIGH" : "LOW");
+
             _config.setRelayState(state);
-            digitalWrite(_pinRelayControl, state ? HIGH : LOW);
+
+            // Enhanced relay control with explicit pin configuration
+            pinMode(_pinRelayControl, OUTPUT);  // Ensure pin is output
+
+            if (state) {
+                digitalWrite(_pinRelayControl, HIGH);
+                Serial.printf("🔌 [RELAY DEBUG] Setting pin %d to HIGH (3.3V)\n", _pinRelayControl);
+            } else {
+                digitalWrite(_pinRelayControl, LOW);
+                Serial.printf("🔌 [RELAY DEBUG] Setting pin %d to LOW (0V)\n", _pinRelayControl);
+            }
+
+            // Verify the pin state after setting
+            delay(10); // Small delay to ensure state change
+            bool actualState = digitalRead(_pinRelayControl);
+            Serial.printf("🔌 [RELAY DEBUG] Pin %d after: %s\n", _pinRelayControl, actualState ? "HIGH" : "LOW");
+
+            if (actualState != state) {
+                Serial.println("❌ [RELAY DEBUG] WARNING: Pin state doesn't match command!");
+            } else {
+                Serial.println("✅ [RELAY DEBUG] Pin state verified correct");
+            }
+
+            // Check if this is a hardware driver issue
+            if (state && actualState) {
+                Serial.println("🔍 [RELAY DEBUG] If relay still doesn't click:");
+                Serial.println("   • Check if relay needs transistor driver (ESP32 = 3.3V, 20mA max)");
+                Serial.println("   • Verify relay coil voltage (should be 3.3V or 5V type)");
+                Serial.println("   • Check relay wiring and power supply");
+                Serial.println("   • Add flyback diode if using inductive relay");
+            }
+
             _config.save();
             return true;
         }
