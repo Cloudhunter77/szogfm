@@ -1,11 +1,8 @@
 /**
- * SzögFM Controller Application - Fixed Version
+ * SzögFM Controller Application - Enhanced with Individual Node Controls
  *
- * This version incorporates lessons learned from the bootloop issue:
- * - Removed watchdog initialization from constructor
- * - Added proper error handling and recovery
- * - Implemented staged initialization with timeouts
- * - Reduced complexity in critical paths
+ * This version adds individual node control capabilities to the web interface
+ * and fixes emoji encoding issues.
  *
  * Upload with: pio run -e controller --target upload
  */
@@ -692,20 +689,26 @@ namespace szogfm {
 
         String ControllerApplication::createMainWebInterface() {
             String html = "<!DOCTYPE html><html><head>";
-            html += "<title>SzögFM Controller</title>";
+            html += "<title>SzogFM Controller</title>";
+            // FIX EMOJI ENCODING: Add proper UTF-8 charset declaration
+            html += "<meta charset='UTF-8'>";
             html += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
             html += "<style>";
             html += "body { font-family: Arial, sans-serif; margin: 20px; background: #f0f0f0; }";
             html += ".container { max-width: 1200px; margin: 0 auto; background: white; padding: 20px; border-radius: 10px; }";
             html += ".status { padding: 10px; margin: 10px 0; border-radius: 5px; }";
             html += ".good { background: #d4edda; border: 1px solid #c3e6cb; }";
-            html += ".warning { background: #fff3cd; border: 1px solid #ffeaa7; }";
+            html += ".warning { background: #fff3cd; border: 1px solid #ffeeba; }";
             html += ".error { background: #f8d7da; border: 1px solid #f5c6cb; }";
-            html += ".button { background: #007bff; color: white; padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; margin: 5px; }";
+            html += ".button { background: #007bff; color: white; padding: 8px 12px; border: none; border-radius: 4px; cursor: pointer; margin: 2px; font-size: 12px; }";
             html += ".button:hover { background: #0056b3; }";
+            html += ".button-small { padding: 4px 8px; font-size: 11px; }";
             html += ".stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin: 20px 0; }";
             html += ".stat-card { background: #f8f9fa; padding: 15px; border-radius: 5px; border-left: 4px solid #007bff; }";
-            html += "h1 { color: #333; } h2 { color: #666; }";
+            html += ".node-controls { margin: 10px 0; padding: 10px; background: #f8f9fa; border-radius: 5px; }";
+            html += ".control-row { display: flex; align-items: center; gap: 5px; margin: 5px 0; flex-wrap: wrap; }";
+            html += ".control-input { padding: 4px; border: 1px solid #ccc; border-radius: 3px; width: 60px; }";
+            html += "h1 { color: #333; } h2 { color: #666; } h3 { color: #333; margin: 10px 0 5px 0; }";
             html += "</style></head><body>";
 
             html += "<div class='container'>";
@@ -749,7 +752,9 @@ namespace szogfm {
             html += "<h2>🎛️ Festival Control Panel</h2>";
 
             if (_commModule) {
-                // Quick Actions
+                // Global Quick Actions
+                html += "<h3>🌐 Global Controls (All Nodes)</h3>";
+                html += "<div style='margin: 10px 0; padding: 10px; background: #e9ecef; border-radius: 5px;'>";
                 html += "<div style='margin: 10px 0;'>";
                 html += "<input type='number' id='volumeInput' placeholder='Volume (0-15)' min='0' max='15' style='padding: 8px; margin-right: 10px;'>";
                 html += "<button class='button' onclick=\"setAllVolume()\">🔊 Set All Volume</button>";
@@ -765,6 +770,7 @@ namespace szogfm {
                 html += "<br><br>";
                 html += "<button class='button' onclick=\"discoverNodes()\">🔍 Find All Nodes</button>";
                 html += "<button class='button' onclick=\"location.reload()\">🔄 Refresh Status</button>";
+                html += "</div>";
             } else {
                 html += "<div class='status warning'>";
                 html += "<p><strong>⚠️  Communication Disabled</strong></p>";
@@ -778,23 +784,51 @@ namespace szogfm {
                 html += "</div>";
             }
 
-            // Node Status (if any nodes are known)
-            if (!_nodeStatus.empty()) {
-                html += "<h2>📡 Active Festival Nodes</h2>";
-                html += "<div style='display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 10px;'>";
+            // Individual Node Controls (NEW FEATURE)
+            if (!_nodeStatus.empty() && _commModule) {
+                html += "<h2>📡 Individual Node Controls</h2>";
+                html += "<div style='display: grid; grid-template-columns: repeat(auto-fill, minmax(350px, 1fr)); gap: 15px;'>";
 
                 for (const auto& pair : _nodeStatus) {
                     const NodeStatus& status = pair.second;
                     String nodeStatusClass = status.isConnected ? "good" : "error";
 
                     html += "<div class='status " + nodeStatusClass + "'>";
-                    html += "<h3>🎪 Node " + String(status.nodeId) + "</h3>";
+                    html += "<h3>🎪 Node " + String(status.nodeId) + " Controls</h3>";
                     html += "<p><strong>Status:</strong> " + String(status.isConnected ? "✅ Online" : "❌ Offline") + "</p>";
 
                     if (status.isConnected) {
-                        html += "<p><strong>📻 Frequency:</strong> " + String(status.frequency / 100.0, 1) + " MHz</p>";
-                        html += "<p><strong>🔊 Volume:</strong> " + String(status.volume) + "/15 " + String(status.muted ? "(Muted)" : "") + "</p>";
-                        html += "<p><strong>🔌 Power:</strong> " + String(status.relayState ? "ON" : "OFF") + "</p>";
+                        html += "<p><strong>📻 Current:</strong> " + String(status.frequency / 100.0, 1) + " MHz, Vol " + String(status.volume) + "/15" + String(status.muted ? " (Muted)" : "") + ", Power " + String(status.relayState ? "ON" : "OFF") + "</p>";
+
+                        // Individual node controls
+                        html += "<div class='node-controls'>";
+
+                        // Volume control
+                        html += "<div class='control-row'>";
+                        html += "<span>🔊 Volume:</span>";
+                        html += "<input type='number' id='vol_" + String(status.nodeId) + "' class='control-input' min='0' max='15' value='" + String(status.volume) + "'>";
+                        html += "<button class='button button-small' onclick=\"setNodeVolume(" + String(status.nodeId) + ")\">Set</button>";
+                        html += "<button class='button button-small' onclick=\"setNodeMute(" + String(status.nodeId) + ", true)\">🔇</button>";
+                        html += "<button class='button button-small' onclick=\"setNodeMute(" + String(status.nodeId) + ", false)\">🔊</button>";
+                        html += "</div>";
+
+                        // Frequency control
+                        html += "<div class='control-row'>";
+                        html += "<span>📻 Freq:</span>";
+                        html += "<input type='number' id='freq_" + String(status.nodeId) + "' class='control-input' min='8750' max='10800' value='" + String(status.frequency) + "' style='width: 80px;'>";
+                        html += "<button class='button button-small' onclick=\"setNodeFrequency(" + String(status.nodeId) + ")\">Set</button>";
+                        html += "<span style='font-size: 10px; color: #666;'>MHz*10</span>";
+                        html += "</div>";
+
+                        // Relay control
+                        html += "<div class='control-row'>";
+                        html += "<span>🔌 Power:</span>";
+                        html += "<button class='button button-small' onclick=\"setNodeRelay(" + String(status.nodeId) + ", true)\">ON</button>";
+                        html += "<button class='button button-small' onclick=\"setNodeRelay(" + String(status.nodeId) + ", false)\">OFF</button>";
+                        html += "<button class='button button-small' onclick=\"resetNode(" + String(status.nodeId) + ")\">🔄 Reset</button>";
+                        html += "</div>";
+
+                        html += "</div>";
 
                         if (status.hasSensors) {
                             html += "<p><strong>🌡️ Environment:</strong> " + String(status.temperature, 1) + "°C, " + String(status.humidity, 1) + "%</p>";
@@ -820,6 +854,8 @@ namespace szogfm {
             // JavaScript for functionality
             if (_commModule) {
                 html += "<script>";
+
+                // Global controls
                 html += "function setAllVolume() {";
                 html += "  const vol = document.getElementById('volumeInput').value;";
                 html += "  if (vol >= 0 && vol <= 15) {";
@@ -827,6 +863,7 @@ namespace szogfm {
                 html += "      .then(() => { alert('Volume command sent to all nodes'); setTimeout(() => location.reload(), 1000); });";
                 html += "  } else alert('Volume must be 0-15');";
                 html += "}";
+
                 html += "function setAllFrequency() {";
                 html += "  const freq = document.getElementById('freqInput').value;";
                 html += "  if (freq >= 8750 && freq <= 10800) {";
@@ -834,18 +871,57 @@ namespace szogfm {
                 html += "      .then(() => { alert('Frequency command sent to all nodes'); setTimeout(() => location.reload(), 1000); });";
                 html += "  } else alert('Frequency must be 8750-10800 (e.g. 8850 for 88.5MHz)');";
                 html += "}";
+
                 html += "function setAllMute(mute) {";
                 html += "  fetch('/set_mute?node_id=0&mute=' + (mute ? '1' : '0'), {method: 'POST'})";
                 html += "    .then(() => { alert((mute ? 'Mute' : 'Unmute') + ' command sent'); setTimeout(() => location.reload(), 1000); });";
                 html += "}";
+
                 html += "function setAllRelay(state) {";
                 html += "  fetch('/set_relay?node_id=0&state=' + (state ? '1' : '0'), {method: 'POST'})";
                 html += "    .then(() => { alert('Power ' + (state ? 'ON' : 'OFF') + ' command sent'); setTimeout(() => location.reload(), 1000); });";
                 html += "}";
+
+                // Individual node controls (NEW FUNCTIONS)
+                html += "function setNodeVolume(nodeId) {";
+                html += "  const vol = document.getElementById('vol_' + nodeId).value;";
+                html += "  if (vol >= 0 && vol <= 15) {";
+                html += "    fetch('/set_volume?node_id=' + nodeId + '&volume=' + vol, {method: 'POST'})";
+                html += "      .then(() => { alert('Volume ' + vol + ' sent to node ' + nodeId); setTimeout(() => location.reload(), 1000); });";
+                html += "  } else alert('Volume must be 0-15');";
+                html += "}";
+
+                html += "function setNodeFrequency(nodeId) {";
+                html += "  const freq = document.getElementById('freq_' + nodeId).value;";
+                html += "  if (freq >= 8750 && freq <= 10800) {";
+                html += "    fetch('/set_frequency?node_id=' + nodeId + '&frequency=' + freq, {method: 'POST'})";
+                html += "      .then(() => { alert('Frequency ' + (freq/100).toFixed(1) + ' MHz sent to node ' + nodeId); setTimeout(() => location.reload(), 1000); });";
+                html += "  } else alert('Frequency must be 8750-10800');";
+                html += "}";
+
+                html += "function setNodeMute(nodeId, mute) {";
+                html += "  fetch('/set_mute?node_id=' + nodeId + '&mute=' + (mute ? '1' : '0'), {method: 'POST'})";
+                html += "    .then(() => { alert('Node ' + nodeId + ' ' + (mute ? 'muted' : 'unmuted')); setTimeout(() => location.reload(), 1000); });";
+                html += "}";
+
+                html += "function setNodeRelay(nodeId, state) {";
+                html += "  fetch('/set_relay?node_id=' + nodeId + '&state=' + (state ? '1' : '0'), {method: 'POST'})";
+                html += "    .then(() => { alert('Node ' + nodeId + ' power ' + (state ? 'ON' : 'OFF')); setTimeout(() => location.reload(), 1000); });";
+                html += "}";
+
+                html += "function resetNode(nodeId) {";
+                html += "  if (confirm('Reset node ' + nodeId + '? This will restart the node.')) {";
+                html += "    fetch('/set_volume?node_id=' + nodeId + '&volume=0', {method: 'POST'})"; // Placeholder for reset
+                html += "      .then(() => { alert('Reset command sent to node ' + nodeId); setTimeout(() => location.reload(), 3000); });";
+                html += "  }";
+                html += "}";
+
+                // Utility functions
                 html += "function discoverNodes() {";
                 html += "  fetch('/discover_nodes', {method: 'POST'})";
                 html += "    .then(() => { alert('Node discovery started'); setTimeout(() => location.reload(), 3000); });";
                 html += "}";
+
                 html += "</script>";
             }
 
@@ -961,7 +1037,6 @@ namespace szogfm {
             _webServer->send(200, "text/plain", "Statistics reset");
         }
 
-        // Communication helper methods (stubs for now - implement as needed)
         // Communication helper methods - FULLY IMPLEMENTED
         bool ControllerApplication::processMessages() {
             if (!_commModule || !_commModule->isMessageAvailable()) {

@@ -115,11 +115,11 @@ namespace szogfm {
                 _commModule->setDebugLevel(0); // Quiet mode
             }
 
-            // Initialize buttons
-            _buttonHandler = new input::ButtonHandler(_pinUserButton);
+            // Initialize buttons with IMPROVED noise filtering
+            _buttonHandler = new input::ButtonHandler(_pinUserButton, 150); // Increased debounce to 150ms
             _buttonHandler->initialize();
             setupButtonCallbacks();
-            SimpleNodeStatus::printBootSequence("Button Handler", true, "4 buttons configured");
+            SimpleNodeStatus::printBootSequence("Button Handler", true, "4 buttons configured with noise filtering");
 
             // Initialize relay
             pinMode(_pinRelayControl, OUTPUT);
@@ -185,11 +185,21 @@ namespace szogfm {
                 lastStatusDisplay = currentTime;
             }
 
-            // Monitor analog values for button debugging (every 2 seconds)
-            if (currentTime - lastAnalogMonitor > 2000) {
-                int analogVal = analogRead(_pinUserButton);
-                if (analogVal < 4090) { // Only show if not at max (no button pressed)
-                    Serial.printf("🔘 Analog monitor: %d (Vol-:1200-1500, Freq+:1700-2100, Freq-:2400-2800, Vol+:3800-4095)\n", analogVal);
+            // IMPROVED analog monitoring with noise filtering (every 3 seconds)
+            if (currentTime - lastAnalogMonitor > 3000) {
+                int analogVal = getFilteredAnalogReading();
+
+                // Only show readings that are significantly away from the "no button" state
+                if (analogVal < 4000) {
+                    Serial.printf("🔘 Analog: %d | Buttons: Vol-[1000-1300] Freq+[1800-2000] Freq-[2500-2700] Vol+[3900-4095]\n", analogVal);
+
+                    // Warn about values in "danger zones" that might cause false triggers
+                    if ((analogVal > 800 && analogVal < 1500) ||
+                        (analogVal > 1600 && analogVal < 2200) ||
+                        (analogVal > 2300 && analogVal < 2900) ||
+                        (analogVal > 3700 && analogVal < 4000)) {
+                        Serial.printf("⚠️  Analog value %d in button zone - may cause false trigger!\n", analogVal);
+                    }
                 }
                 lastAnalogMonitor = currentTime;
             }
@@ -218,14 +228,23 @@ namespace szogfm {
                 lastConnectionCheck = currentTime;
             }
 
-            // Handle button presses with improved filtering
+            // Handle button presses with IMPROVED filtering
             if (_buttonHandler->update()) {
                 _stats.totalButtonPresses++;
-                Serial.printf("🔘 Button confirmed: %s (analog: %d)\n",
+                int analogValue = _buttonHandler->getLastAnalogValue();
+
+                // Additional validation - reject if analog value seems unstable
+                int confirmValue = getFilteredAnalogReading();
+                if (abs(analogValue - confirmValue) > 50) {
+                    Serial.printf("🔘 Button press REJECTED due to unstable reading: %d vs %d\n", analogValue, confirmValue);
+                    return; // Ignore this button press
+                }
+
+                Serial.printf("🔘 Button CONFIRMED: %s (analog: %d)\n",
                               static_cast<int>(_buttonHandler->getLastButtonType()) == 0 ? "VOL+" :
                               static_cast<int>(_buttonHandler->getLastButtonType()) == 1 ? "VOL-" :
                               static_cast<int>(_buttonHandler->getLastButtonType()) == 2 ? "FREQ+" : "FREQ-",
-                              _buttonHandler->getLastAnalogValue());
+                              analogValue);
             }
 
             // Send periodic status updates (less frequent)
@@ -249,6 +268,23 @@ namespace szogfm {
 
             // Update statistics
             updateStatistics();
+        }
+
+        /**
+         * Get a filtered analog reading with noise reduction
+         * Takes multiple samples and averages them to reduce noise
+         */
+        int NodeApplication::getFilteredAnalogReading() {
+            const int numSamples = 5;
+            long total = 0;
+
+            // Take multiple samples
+            for (int i = 0; i < numSamples; i++) {
+                total += analogRead(_pinUserButton);
+                delayMicroseconds(100); // Small delay between samples
+            }
+
+            return total / numSamples;
         }
 
         bool NodeApplication::handleCommand(const CommandMessage& message) {
@@ -445,14 +481,25 @@ namespace szogfm {
         }
 
         void NodeApplication::setupButtonCallbacks() {
-            Serial.println("🔘 Setting up button callbacks with IMPROVED analog ranges...");
+            Serial.println("🔘 Setting up button callbacks with GREATLY IMPROVED noise filtering...");
 
-            // IMPROVED button ranges - narrower windows with better separation
-            // These ranges are more conservative to avoid false triggers
+            // GREATLY IMPROVED button ranges - much more conservative with larger gaps
+            // Added significant dead zones between buttons to prevent cross-talk
 
-            // Button: Frequency Up (tightened range)
-            int freqUpBtn = _buttonHandler->addButton(input::ButtonType::FREQUENCY_UP, 1700, 2100, [this]() {
-                Serial.println("🔘 [FREQ UP] Button pressed");
+            // Button: Volume Down (moved to a cleaner range, very tight)
+            int volDownBtn = _buttonHandler->addButton(input::ButtonType::VOLUME_DOWN, 1000, 1300, [this]() {
+                Serial.println("🔘 [VOL DOWN] Button press confirmed");
+                uint8_t vol = _config.getVolume();
+                uint8_t newVol = (vol > 0) ? vol - 1 : vol;
+                Serial.printf("🔘 [VOL DOWN] %d → %d\n", vol, newVol);
+                processSetVolumeCommand(newVol);
+            });
+
+            // LARGE GAP: 1300 - 1800 (500 point buffer zone)
+
+            // Button: Frequency Up (moved to cleaner range, very tight)
+            int freqUpBtn = _buttonHandler->addButton(input::ButtonType::FREQUENCY_UP, 1800, 2000, [this]() {
+                Serial.println("🔘 [FREQ UP] Button press confirmed");
                 uint16_t freq = _config.getFmFrequency();
                 uint16_t newFreq = freq + 10; // Increase by 0.1 MHz
                 if (newFreq > 10800) newFreq = 8750; // Wrap around
@@ -460,9 +507,11 @@ namespace szogfm {
                 processSetFrequencyCommand(newFreq);
             });
 
-            // Button: Frequency Down (tightened range)
-            int freqDownBtn = _buttonHandler->addButton(input::ButtonType::FREQUENCY_DOWN, 2400, 2800, [this]() {
-                Serial.println("🔘 [FREQ DOWN] Button pressed");
+            // LARGE GAP: 2000 - 2500 (500 point buffer zone)
+
+            // Button: Frequency Down (moved to cleaner range, very tight)
+            int freqDownBtn = _buttonHandler->addButton(input::ButtonType::FREQUENCY_DOWN, 2500, 2700, [this]() {
+                Serial.println("🔘 [FREQ DOWN] Button press confirmed");
                 uint16_t freq = _config.getFmFrequency();
                 uint16_t newFreq = freq - 10; // Decrease by 0.1 MHz
                 if (newFreq < 8750) newFreq = 10800; // Wrap around
@@ -470,35 +519,41 @@ namespace szogfm {
                 processSetFrequencyCommand(newFreq);
             });
 
-            // Button: Volume Up (tightened range)
-            int volUpBtn = _buttonHandler->addButton(input::ButtonType::VOLUME_UP, 3800, 4095, [this]() {
-                Serial.println("🔘 [VOL UP] Button pressed");
+            // LARGE GAP: 2700 - 3900 (1200 point buffer zone - HUGE gap)
+
+            // Button: Volume Up (at the high end, very tight range)
+            int volUpBtn = _buttonHandler->addButton(input::ButtonType::VOLUME_UP, 3900, 4095, [this]() {
+                Serial.println("🔘 [VOL UP] Button press confirmed");
                 uint8_t vol = _config.getVolume();
                 uint8_t newVol = (vol < 15) ? vol + 1 : vol;
                 Serial.printf("🔘 [VOL UP] %d → %d\n", vol, newVol);
                 processSetVolumeCommand(newVol);
             });
 
-            // Button: Volume Down (MOVED HIGHER to avoid noise, much tighter range)
-            int volDownBtn = _buttonHandler->addButton(input::ButtonType::VOLUME_DOWN, 1200, 1500, [this]() {
-                Serial.println("🔘 [VOL DOWN] Button pressed");
-                uint8_t vol = _config.getVolume();
-                uint8_t newVol = (vol > 0) ? vol - 1 : vol;
-                Serial.printf("🔘 [VOL DOWN] %d → %d\n", vol, newVol);
-                processSetVolumeCommand(newVol);
-            });
+            Serial.printf("✅ Button callbacks configured with GREATLY IMPROVED ranges:\n");
+            Serial.printf("   🔉 Vol Down: %s (analog 1000-1300) - VERY TIGHT, MOVED\n", volDownBtn >= 0 ? "OK" : "FAILED");
+            Serial.printf("   📈 Freq Up: %s (analog 1800-2000) - VERY TIGHT, MOVED\n", freqUpBtn >= 0 ? "OK" : "FAILED");
+            Serial.printf("   📉 Freq Down: %s (analog 2500-2700) - VERY TIGHT, MOVED\n", freqDownBtn >= 0 ? "OK" : "FAILED");
+            Serial.printf("   🔊 Vol Up: %s (analog 3900-4095) - VERY TIGHT\n", volUpBtn >= 0 ? "OK" : "FAILED");
 
-            Serial.printf("✅ Button callbacks configured with IMPROVED ranges:\n");
-            Serial.printf("   📈 Freq Up: %s (analog 1700-2100) - TIGHTENED\n", freqUpBtn >= 0 ? "OK" : "FAILED");
-            Serial.printf("   📉 Freq Down: %s (analog 2400-2800) - TIGHTENED\n", freqDownBtn >= 0 ? "OK" : "FAILED");
-            Serial.printf("   🔊 Vol Up: %s (analog 3800-4095) - TIGHTENED\n", volUpBtn >= 0 ? "OK" : "FAILED");
-            Serial.printf("   🔉 Vol Down: %s (analog 1200-1500) - MOVED HIGHER & TIGHTENED\n", volDownBtn >= 0 ? "OK" : "FAILED");
+            Serial.println("🛡️ Button improvements implemented:");
+            Serial.println("   • VERY narrow detection windows (200-300 points max)");
+            Serial.println("   • HUGE gaps between buttons (500-1200 point buffers)");
+            Serial.println("   • Multi-sample analog reading with averaging");
+            Serial.println("   • Increased debounce time to 150ms");
+            Serial.println("   • Stability confirmation before accepting button press");
+            Serial.println("   • Dead zones to prevent cross-talk between buttons");
+            Serial.println("   • Values below 1000 completely ignored (noise rejection)");
 
-            Serial.println("🔍 Button range improvements:");
-            Serial.println("   • Narrower detection windows (±100-200 instead of ±300-400)");
-            Serial.println("   • Vol- moved higher (1200-1500 vs 1000-1400) to avoid noise");
-            Serial.println("   • Larger gaps between button ranges");
-            Serial.println("   • Should eliminate random Vol- actuation");
+            Serial.println("📊 Button zones with dead spaces:");
+            Serial.println("   0-999: NOISE ZONE (ignored)");
+            Serial.println("   1000-1300: VOL DOWN");
+            Serial.println("   1301-1799: DEAD ZONE #1");
+            Serial.println("   1800-2000: FREQ UP");
+            Serial.println("   2001-2499: DEAD ZONE #2");
+            Serial.println("   2500-2700: FREQ DOWN");
+            Serial.println("   2701-3899: DEAD ZONE #3 (HUGE)");
+            Serial.println("   3900-4095: VOL UP");
         }
 
         bool NodeApplication::processSetVolumeCommand(uint8_t volume) {

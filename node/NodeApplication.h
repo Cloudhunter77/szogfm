@@ -61,7 +61,7 @@ namespace szogfm {
  * Core functionality:
  * - FM radio control (frequency, volume, mute)
  * - 433MHz communication with central controller
- * - Local button control
+ * - Local button control with advanced noise filtering
  * - Relay control for speaker power
  * - Status reporting and monitoring
  */
@@ -204,9 +204,16 @@ namespace szogfm {
             static constexpr unsigned long SELF_TEST_INTERVAL = 300000;   // 5 minutes
 
             /**
-             * Set up button callbacks for local control
+             * Set up button callbacks for local control with improved noise filtering
              */
             void setupButtonCallbacks();
+
+            /**
+             * Get a filtered analog reading with noise reduction
+             * Takes multiple samples and averages them to reduce electrical noise
+             * @return Filtered analog reading (0-4095)
+             */
+            int getFilteredAnalogReading();
 
             /**
              * Initialize sensors if available (DHT22)

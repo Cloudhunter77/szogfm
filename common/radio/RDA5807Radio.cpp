@@ -118,6 +118,7 @@ namespace szogfm {
             logCurrentStatus();
 
             Serial.println("🎉 RDA5807M initialization completed successfully!");
+            Serial.println("📻 FREQUENCY CALIBRATION: Using 87.0 MHz base (corrected from 87.5 MHz)");
             Serial.println(repeatChar('=', 50));
 
             return true;
@@ -426,7 +427,8 @@ namespace szogfm {
             if (readRegister(REG_CHAN, channel)) {
                 Serial.printf("      Channel (0x%02X): 0x%04X\n", REG_CHAN, channel);
                 uint16_t channelNum = (channel >> 6) & 0x03FF;
-                uint16_t frequency = 8750 + (channelNum * 10);
+                // FIXED: Using correct base frequency (87.0 MHz instead of 87.5 MHz)
+                uint16_t frequency = 8700 + (channelNum * 10);
                 Serial.printf("         Channel: %d (%.1f MHz)\n", channelNum, frequency / 100.0);
             }
 
@@ -457,20 +459,21 @@ namespace szogfm {
                 return false;
             }
 
-            // Validate frequency range (87.5 MHz to 108.0 MHz)
-            if (frequency < 8750 || frequency > 10800) {
-                _lastError = "Frequency out of range (87.5-108.0 MHz)";
+            // Validate frequency range (87.0 MHz to 108.0 MHz) - UPDATED RANGE
+            if (frequency < 8700 || frequency > 10800) {
+                _lastError = "Frequency out of range (87.0-108.0 MHz)";
                 Serial.printf("❌ [FREQ] %s: %d\n", _lastError.c_str(), frequency);
                 return false;
             }
 
             Serial.printf("🎵 [FREQ] Setting frequency to %.1f MHz\n", frequency / 100.0);
 
-            // Calculate channel number for RDA5807M
-            // Channel = (Frequency - 87.5 MHz) / 0.1 MHz
-            uint16_t channel = (frequency - 8750) / 10;
+            // FIXED: Calculate channel number for RDA5807M using correct base frequency
+            // Channel = (Frequency - 87.0 MHz) / 0.1 MHz
+            // Previous code used 87.5 MHz base, which was causing the 0.5 MHz offset!
+            uint16_t channel = (frequency - 8700) / 10;  // CHANGED FROM 8750 to 8700
 
-            Serial.printf("   📊 Calculated channel: %d\n", channel);
+            Serial.printf("   📊 Calculated channel: %d (using 87.0 MHz base)\n", channel);
 
             // Read current channel register to preserve other settings
             uint16_t channelReg = 0;
@@ -528,14 +531,15 @@ namespace szogfm {
             uint16_t verifyReg;
             if (readRegister(REG_CHAN, verifyReg)) {
                 uint16_t readChannel = (verifyReg >> 6) & 0x03FF;
-                uint16_t readFrequency = 8750 + (readChannel * 10);
+                // FIXED: Using correct base frequency for verification
+                uint16_t readFrequency = 8700 + (readChannel * 10);  // CHANGED FROM 8750 to 8700
 
                 Serial.printf("   📖 Verification: set=%d, read=%d (%.1f MHz)\n",
                               channel, readChannel, readFrequency / 100.0);
 
                 if (abs((int)readChannel - (int)channel) <= 1) { // Allow 1 channel tolerance
                     _frequency = frequency;
-                    Serial.printf("✅ [FREQ] Frequency set successfully to %.1f MHz\n", frequency / 100.0);
+                    Serial.printf("✅ [FREQ] Frequency set successfully to %.1f MHz (corrected base: 87.0 MHz)\n", frequency / 100.0);
 
                     // Update display of current radio status
                     delay(50); // Give radio time to settle
@@ -833,7 +837,8 @@ namespace szogfm {
             uint16_t chanReg;
             if (readRegister(REG_CHAN, chanReg)) {
                 uint16_t channel = (chanReg >> 6) & 0x03FF;
-                _frequency = 8750 + (channel * 10);
+                // FIXED: Using correct base frequency for seek results
+                _frequency = 8700 + (channel * 10);  // CHANGED FROM 8750 to 8700
                 Serial.printf("✅ [SEEK] Found station at %.1f MHz\n", _frequency / 100.0);
             }
 

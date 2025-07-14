@@ -11,23 +11,39 @@ namespace szogfm {
         }
 
         void ButtonHandler::initialize() {
-            // Configure the analog pin as input
-            pinMode(_analogPin, INPUT);
+            // Configure the analog pin as input with internal pull-up for stability
+            pinMode(_analogPin, INPUT_PULLUP);
         }
 
         bool ButtonHandler::update() {
-            // Read analog value
+            // Read analog value with improved filtering
             int analogValue = readAnalogValue();
 
-            // Check if a button is pressed
-            if (analogValue > 5) { // Threshold for a valid button press
+            // IMPROVED: Ignore values in the noise zone (below 800)
+            if (analogValue < 800) {
+                _buttonPressed = false;
+                return false;
+            }
+
+            // Check if a button is pressed (valid analog range)
+            if (analogValue > 800 && analogValue < 4090) { // Wider valid range but with filtering
                 // Check for debounce
                 unsigned long currentTime = millis();
                 if (currentTime - _lastDebounceTime > _debounceDelay) {
                     int buttonIndex = findPressedButton(analogValue);
 
                     if (buttonIndex >= 0 && !_buttonPressed) {
-                        // Button press detected
+                        // ADDITIONAL STABILITY CHECK: Re-read analog value to confirm
+                        delay(10); // Small delay
+                        int confirmValue = readAnalogValue();
+
+                        // Check if the reading is stable (within reasonable tolerance)
+                        if (abs(analogValue - confirmValue) > 100) {
+                            // Readings are too different, ignore this press (likely noise)
+                            return false;
+                        }
+
+                        // Button press confirmed as stable
                         _lastButtonType = _buttons[buttonIndex].type;
                         _lastAnalogValue = analogValue;
                         _buttonPressed = true;
@@ -42,7 +58,7 @@ namespace szogfm {
                     }
                 }
             } else {
-                // No button is pressed
+                // No button is pressed or value is in invalid range
                 _buttonPressed = false;
             }
 
@@ -54,11 +70,23 @@ namespace szogfm {
                 return -1; // Maximum number of buttons reached
             }
 
-            // Add the button
+            // Add the button with validation
             _buttons[_buttonCount].type = type;
             _buttons[_buttonCount].minValue = minValue;
             _buttons[_buttonCount].maxValue = maxValue;
             _buttons[_buttonCount].callback = callback;
+
+            // Validate button ranges don't overlap
+            for (int i = 0; i < _buttonCount; i++) {
+                // Check for overlap with existing buttons
+                if ((minValue >= _buttons[i].minValue && minValue <= _buttons[i].maxValue) ||
+                    (maxValue >= _buttons[i].minValue && maxValue <= _buttons[i].maxValue) ||
+                    (minValue <= _buttons[i].minValue && maxValue >= _buttons[i].maxValue)) {
+
+                    Serial.printf("⚠️  Button range overlap detected! New: %d-%d, Existing: %d-%d\n",
+                                  minValue, maxValue, _buttons[i].minValue, _buttons[i].maxValue);
+                }
+            }
 
             return _buttonCount++;
         }
@@ -83,11 +111,22 @@ namespace szogfm {
         }
 
         int ButtonHandler::readAnalogValue() {
-            // Read the analog value
-            return analogRead(_analogPin);
+            // IMPROVED: Take multiple samples and return average for noise reduction
+            const int numSamples = 3;
+            long total = 0;
+
+            for (int i = 0; i < numSamples; i++) {
+                total += analogRead(_analogPin);
+                if (i < numSamples - 1) {
+                    delayMicroseconds(50); // Small delay between samples
+                }
+            }
+
+            return total / numSamples;
         }
 
         int ButtonHandler::findPressedButton(int analogValue) {
+            // Find button with exact range match
             for (int i = 0; i < _buttonCount; i++) {
                 if (analogValue >= _buttons[i].minValue && analogValue <= _buttons[i].maxValue) {
                     return i;
