@@ -89,7 +89,7 @@ namespace szogfm {
         // Reset to default values
         _version = CURRENT_VERSION;
         // Keep the existing node ID
-        _fmFrequency = 9480; // 88.5 MHz
+        _fmFrequency = 8850; // 88.5 MHz
         _volume = 8;
         _muted = false;
         _relayState = false;
