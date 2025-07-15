@@ -79,17 +79,21 @@ void printSystemStatus() {
     Serial.printf("   🔧 CPU freq: %d MHz\n", getCpuFrequencyMhz());
     Serial.printf("   🌡️  Temperature: %.1f°C\n", temperatureRead());
 
-    // WiFi status
+    // WiFi status - updated for station mode
     if (WiFi.getMode() == WIFI_AP) {
-        Serial.printf("   📡 WiFi mode: Access Point\n");
+        Serial.printf("   📡 WiFi mode: Access Point (Emergency)\n");
         Serial.printf("   📶 AP IP: %s\n", WiFi.softAPIP().toString().c_str());
         Serial.printf("   👥 Connected stations: %d\n", WiFi.softAPgetStationNum());
     } else if (WiFi.getMode() == WIFI_STA && WiFi.status() == WL_CONNECTED) {
-        Serial.printf("   📡 WiFi mode: Station (connected)\n");
-        Serial.printf("   📶 Station IP: %s\n", WiFi.localIP().toString().c_str());
-        Serial.printf("   📊 RSSI: %d dBm\n", WiFi.RSSI());
+        Serial.printf("   📡 WiFi mode: Station (connected to existing network)\n");
+        Serial.printf("   🌐 Network: %s\n", WiFi.SSID().c_str());
+        Serial.printf("   📍 IP Address: %s\n", WiFi.localIP().toString().c_str());
+        Serial.printf("   🚪 Gateway: %s\n", WiFi.gatewayIP().toString().c_str());
+        Serial.printf("   📊 Signal Strength: %d dBm\n", WiFi.RSSI());
+        Serial.printf("   🏷️  MAC Address: %s\n", WiFi.macAddress().c_str());
     } else {
-        Serial.printf("   📡 WiFi mode: Disabled or disconnected\n");
+        Serial.printf("   📡 WiFi mode: Disconnected or failed\n");
+        Serial.printf("   ⚠️  Status code: %d\n", WiFi.status());
     }
 
     // Controller-specific status
@@ -184,7 +188,7 @@ void setup() {
 
     // Normal startup
     Serial.println("\n\n===========================================");
-    Serial.println("🎵 SzögFM Controller Application Starting (FIXED VERSION) 🎵");
+    Serial.println("🎵 SzögFM Controller - Network Station Mode 🎵");
     Serial.println("===========================================\n");
     Serial.printf("⏰ Boot time: %lu ms\n", millis());
     Serial.printf("🔢 Boot count: %d\n", bootCount);
@@ -192,13 +196,27 @@ void setup() {
     Serial.printf("💾 Free heap: %d bytes\n", ESP.getFreeHeap());
     Serial.printf("🔧 CPU Frequency: %d MHz\n", getCpuFrequencyMhz());
 
+    // Print network configuration information
+    Serial.println("\n🌐 NETWORK CONFIGURATION:");
+    Serial.println("   📡 Mode: Station (connects to existing network)");
+    Serial.println("   🌐 Target Network: Medio");
+    Serial.println("   📍 Static IP: 172.17.10.24");
+    Serial.println("   🚪 Gateway: 172.17.10.254");
+    Serial.println("   🔍 Subnet: 255.255.255.0");
+    Serial.println("   🌍 Accessible from anywhere on the network!");
+
     // Print critical fix information
     Serial.println("\n🔧 CRITICAL FIXES APPLIED:");
     Serial.println("   ✅ Fixed node command filtering (relay commands work correctly)");
     Serial.println("   ✅ Enhanced web interface with individual node controls");
+    Serial.println("   ✅ Added node renaming functionality for location-based names");
+    Serial.println("   ✅ Added recent activity statistics (10-minute window)");
+    Serial.println("   ✅ Added manual node deletion for interface cleanup");
+    Serial.println("   ✅ Added response timing and message success tracking");
     Serial.println("   ✅ Improved error handling and recovery");
     Serial.println("   ✅ Watchdog timer for system stability");
     Serial.println("   ✅ Boot loop detection and emergency recovery");
+    Serial.println("   ✅ Connected to existing network infrastructure");
     Serial.println("   ✅ Fixed reset function in web interface");
 
     // Initialize watchdog timer
@@ -222,11 +240,12 @@ void setup() {
         Serial.println("❌ Failed to initialize controller application!");
         Serial.println("🔄 System will continue in limited mode...");
         Serial.println("\n🛠️  TROUBLESHOOTING STEPS:");
-        Serial.println("1. Check WiFi credentials and network availability");
-        Serial.println("2. Verify EBYTE 433MHz module connections (pins M0=4, M1=32, AUX=33)");
-        Serial.println("3. Ensure 12V power supply is adequate (5V/3A minimum)");
-        Serial.println("4. Check serial monitor for specific error details");
-        Serial.println("5. Try connecting to fallback AP if main WiFi fails");
+        Serial.println("1. Check network connectivity (ping 172.17.10.254)");
+        Serial.println("2. Verify WiFi credentials are correct");
+        Serial.println("3. Ensure IP 172.17.10.24 is not already in use");
+        Serial.println("4. Verify EBYTE 433MHz module connections (pins M0=4, M1=32, AUX=33)");
+        Serial.println("5. Ensure 12V power supply is adequate (5V/3A minimum)");
+        Serial.println("6. Check serial monitor for specific error details");
 
         // Continue in limited mode rather than rebooting
         Serial.println("📝 Continuing in limited mode - web interface may still work");
@@ -236,21 +255,28 @@ void setup() {
         // Reset boot counter on successful initialization
         bootCount = 0;
 
-        // Print connection information
-        if (WiFi.getMode() == WIFI_AP) {
-            Serial.println("📡 WiFi Access Point Mode:");
-            Serial.printf("   🌐 Network: SzogFM_Controller\n");
-            Serial.printf("   🔐 Password: GombaSzog24\n");
-            Serial.printf("   📍 IP Address: %s\n", WiFi.softAPIP().toString().c_str());
-            Serial.printf("   🌍 Web Interface: http://%s\n", WiFi.softAPIP().toString().c_str());
-        } else if (WiFi.status() == WL_CONNECTED) {
-            Serial.println("📡 WiFi Station Mode:");
+        // Print final connection information
+        if (WiFi.status() == WL_CONNECTED) {
+            Serial.println("\n🎉 NETWORK CONNECTION SUCCESSFUL! 🎉");
+            Serial.println("📊 Connection Details:");
+            Serial.printf("   🌐 Network: %s\n", WiFi.SSID().c_str());
             Serial.printf("   📍 IP Address: %s\n", WiFi.localIP().toString().c_str());
-            Serial.printf("   🌍 Web Interface: http://%s\n", WiFi.localIP().toString().c_str());
+            Serial.printf("   🚪 Gateway: %s\n", WiFi.gatewayIP().toString().c_str());
+            Serial.printf("   🔍 Subnet Mask: %s\n", WiFi.subnetMask().toString().c_str());
+            Serial.printf("   📶 Signal Strength: %d dBm\n", WiFi.RSSI());
+            Serial.printf("   🏷️  MAC Address: %s\n", WiFi.macAddress().c_str());
+            Serial.println("\n🌍 WEB INTERFACE ACCESS:");
+            Serial.printf("   Direct IP: http://172.17.10.24\n");
+            Serial.printf("   Current IP: http://%s\n", WiFi.localIP().toString().c_str());
+            Serial.println("   📱 Access from any device on the network!");
+        } else if (WiFi.getMode() == WIFI_AP) {
+            Serial.println("🆘 Emergency Access Point Mode:");
+            Serial.printf("   📍 AP IP: %s\n", WiFi.softAPIP().toString().c_str());
+            Serial.printf("   🌍 Web Interface: http://%s\n", WiFi.softAPIP().toString().c_str());
         }
 
         // Set up mDNS for easy access
-        if (MDNS.begin("szogfm-controller")) {
+        if (WiFi.status() == WL_CONNECTED && MDNS.begin("szogfm-controller")) {
             Serial.println("🔗 mDNS responder started: http://szogfm-controller.local");
         }
     }
@@ -258,12 +284,15 @@ void setup() {
     Serial.println("\n🎛️  MANUAL CONTROLS:");
     Serial.println("   • Send 'help' via serial for debugging commands");
     Serial.println("   • Send 'status' for detailed status information");
-    Serial.println("   • Send 'nodes' to list all known nodes");
+    Serial.println("   • Send 'nodes' to list all known nodes with custom names");
     Serial.println("   • Send 'discover' to find new nodes");
+    Serial.println("   • Send 'rename <id> <name>' to name nodes by location");
+    Serial.println("   • Send 'network' for detailed network information");
     Serial.println("   • Send 'reset' to manually restart controller");
 
     Serial.println("\n" + String('=', 50));
     Serial.println("✅ Setup complete - Controller ready for festival operation");
+    Serial.println("🌐 Network-connected and remotely accessible!");
     Serial.println(String('=', 50));
 }
 
@@ -271,6 +300,7 @@ void loop() {
     static unsigned long lastWatchdogFeed = 0;
     static unsigned long lastStatusPrint = 0;
     static unsigned long lastMemoryCheck = 0;
+    static unsigned long lastNetworkCheck = 0;
     static uint32_t minHeap = ESP.getFreeHeap();
 
     unsigned long currentTime = millis();
@@ -285,6 +315,22 @@ void loop() {
     if (currentTime - lastWatchdogFeed > 10000) {
         feedWatchdog();
         lastWatchdogFeed = currentTime;
+    }
+
+    // Network connectivity check every 2 minutes
+    if (currentTime - lastNetworkCheck > 120000) {
+        if (WiFi.status() != WL_CONNECTED && !WiFi.getMode() == WIFI_AP) {
+            Serial.println("⚠️  Network connection lost, attempting reconnection...");
+            WiFi.reconnect();
+            delay(5000);
+
+            if (WiFi.status() == WL_CONNECTED) {
+                Serial.printf("✅ Network reconnected: %s\n", WiFi.localIP().toString().c_str());
+            } else {
+                Serial.println("❌ Network reconnection failed");
+            }
+        }
+        lastNetworkCheck = currentTime;
     }
 
     // Memory leak detection every 60 seconds
@@ -313,6 +359,7 @@ void loop() {
             Serial.println("\n📋 AVAILABLE CONTROLLER COMMANDS:");
             Serial.println("   help       - Show this help menu");
             Serial.println("   status     - Show detailed controller status");
+            Serial.println("   network    - Show detailed network information");
             Serial.println("   nodes      - List all known nodes");
             Serial.println("   discover   - Discover new nodes");
             Serial.println("   reset      - Restart the controller");
@@ -322,9 +369,33 @@ void loop() {
             Serial.println("   volume <n> <v> - Set volume for node n to v (0-15)");
             Serial.println("   mute <n>   - Mute node n (or 0 for all)");
             Serial.println("   unmute <n> - Unmute node n (or 0 for all)");
+            Serial.println("   rename <n> <name> - Rename node n to custom location name");
 
         } else if (command == "status") {
             printSystemStatus();
+
+        } else if (command == "network") {
+            Serial.println("\n🌐 DETAILED NETWORK INFORMATION:");
+            Serial.printf("   Connection Status: %s\n", WiFi.status() == WL_CONNECTED ? "✅ Connected" : "❌ Disconnected");
+            Serial.printf("   WiFi Mode: %s\n", WiFi.getMode() == WIFI_STA ? "Station" : WiFi.getMode() == WIFI_AP ? "Access Point" : "Mixed");
+            if (WiFi.status() == WL_CONNECTED) {
+                Serial.printf("   SSID: %s\n", WiFi.SSID().c_str());
+                Serial.printf("   BSSID: %s\n", WiFi.BSSIDstr().c_str());
+                Serial.printf("   Channel: %d\n", WiFi.channel());
+                Serial.printf("   IP Address: %s\n", WiFi.localIP().toString().c_str());
+                Serial.printf("   Subnet Mask: %s\n", WiFi.subnetMask().toString().c_str());
+                Serial.printf("   Gateway: %s\n", WiFi.gatewayIP().toString().c_str());
+                Serial.printf("   DNS 1: %s\n", WiFi.dnsIP(0).toString().c_str());
+                Serial.printf("   DNS 2: %s\n", WiFi.dnsIP(1).toString().c_str());
+                Serial.printf("   Signal Strength: %d dBm\n", WiFi.RSSI());
+                Serial.printf("   MAC Address: %s\n", WiFi.macAddress().c_str());
+                Serial.printf("   Hostname: %s\n", WiFi.getHostname());
+            }
+            if (WiFi.getMode() == WIFI_AP || WiFi.getMode() == WIFI_AP_STA) {
+                Serial.printf("   AP IP: %s\n", WiFi.softAPIP().toString().c_str());
+                Serial.printf("   AP MAC: %s\n", WiFi.softAPmacAddress().c_str());
+                Serial.printf("   Connected Stations: %d\n", WiFi.softAPgetStationNum());
+            }
 
         } else if (command == "nodes") {
             Serial.println("\n📡 KNOWN NODES:");
@@ -332,13 +403,30 @@ void loop() {
             if (nodes.empty()) {
                 Serial.println("   No nodes discovered yet. Try 'discover' command.");
             } else {
+                Serial.println("   Format: ID (Name): Status, Settings, Recent Activity");
                 for (const auto& node : nodes) {
-                    Serial.printf("   Node %d: %s, Freq=%.1fMHz, Vol=%d, Relay=%s\n",
+                    String displayName = controllerApp.getNodeName(node.nodeId);
+                    String timeSince = controllerApp.getTimeSinceLastResponse(node.nodeId);
+
+                    Serial.printf("   Node %d (%s): %s, Freq=%.1fMHz, Vol=%d, Relay=%s\n",
                                   node.nodeId,
+                                  displayName.c_str(),
                                   node.isConnected ? "Online" : "Offline",
                                   node.frequency / 100.0,
                                   node.volume,
                                   node.relayState ? "ON" : "OFF");
+
+                    // Show recent statistics
+                    Serial.printf("      📊 Last 10min: %d/%d msgs",
+                                  node.recentStats.successfulMessages,
+                                  node.recentStats.messagesExchanged);
+
+                    if (node.recentStats.messagesExchanged > 0) {
+                        float successRate = (node.recentStats.successfulMessages * 100.0f) / node.recentStats.messagesExchanged;
+                        Serial.printf(" (%.1f%% success)", successRate);
+                    }
+
+                    Serial.printf(", Last response: %s\n", timeSince.c_str());
                 }
             }
 
@@ -412,6 +500,42 @@ void loop() {
             bool success = controllerApp.setNodeMute(nodeId, false);
             Serial.printf("Result: %s\n", success ? "✅ Command sent" : "❌ Failed");
 
+        } else if (command.startsWith("rename ")) {
+            // Parse rename command: "rename <node> <name>"
+            int firstSpace = command.indexOf(' ');
+            int secondSpace = command.indexOf(' ', firstSpace + 1);
+            if (firstSpace > 0 && secondSpace > 0) {
+                uint8_t nodeId = command.substring(firstSpace + 1, secondSpace).toInt();
+                String newName = command.substring(secondSpace + 1);
+                newName.trim();
+                Serial.printf("🏷️  Renaming node %d to: %s\n", nodeId, newName.c_str());
+                bool success = controllerApp.setNodeName(nodeId, newName);
+                Serial.printf("Result: %s\n", success ? "✅ Name saved" : "❌ Failed");
+            } else {
+                Serial.println("❌ Usage: rename <node_id> <location_name>");
+                Serial.println("   Example: rename 5 Main Stage Left");
+            }
+
+        } else if (command.startsWith("delete ")) {
+            uint8_t nodeId = command.substring(7).toInt();
+            String nodeName = controllerApp.getNodeName(nodeId);
+            Serial.printf("🗑️  Deleting node %d (%s) from system...\n", nodeId, nodeName.c_str());
+
+            Serial.print("Are you sure? This cannot be undone. Type 'yes' to confirm: ");
+            while (!Serial.available()) {
+                delay(100);
+            }
+            String confirmation = Serial.readStringUntil('\n');
+            confirmation.trim();
+            confirmation.toLowerCase();
+
+            if (confirmation == "yes") {
+                bool success = controllerApp.deleteNode(nodeId);
+                Serial.printf("Result: %s\n", success ? "✅ Node deleted" : "❌ Failed");
+            } else {
+                Serial.println("❌ Deletion cancelled");
+            }
+
         } else if (command.length() > 0) {
             Serial.println("❓ Unknown command: " + command);
             Serial.println("💡 Type 'help' for available commands");
@@ -435,9 +559,12 @@ void loop() {
         Serial.printf("💓 Controller heartbeat - Uptime: %lu min, Heap: %d bytes, Nodes: %d connected\n",
                       currentTime / 60000, ESP.getFreeHeap(), connectedNodes);
 
-        // Show WiFi client count if in AP mode
-        if (WiFi.getMode() == WIFI_AP) {
-            Serial.printf("📱 WiFi clients connected: %d\n", WiFi.softAPgetStationNum());
+        // Show network status
+        if (WiFi.status() == WL_CONNECTED) {
+            Serial.printf("🌐 Network: Connected to %s, IP: %s, Signal: %d dBm\n",
+                          WiFi.SSID().c_str(), WiFi.localIP().toString().c_str(), WiFi.RSSI());
+        } else if (WiFi.getMode() == WIFI_AP) {
+            Serial.printf("📱 WiFi Emergency AP clients: %d\n", WiFi.softAPgetStationNum());
         }
 
         lastStatusPrint = currentTime;

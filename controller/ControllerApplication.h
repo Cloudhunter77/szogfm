@@ -17,6 +17,7 @@ namespace szogfm {
  */
         struct NodeStatus {
             uint8_t nodeId;                     // Node identifier (1-20)
+            String nodeName;                    // Custom name/location for this node (e.g., "Main Stage", "Food Court")
             bool isConnected;                   // Current connection status
             unsigned long lastSeenTime;        // Last time we received data from this node
             int rssi;                          // Signal strength of 433MHz link
@@ -47,6 +48,18 @@ namespace szogfm {
             float averageResponseTime;         // Average response time in milliseconds
             unsigned long lastErrorTime;       // Time of last error
             String lastErrorMessage;           // Last error details
+
+            // NEW: Recent activity statistics (last 10 minutes)
+            struct RecentStats {
+                unsigned long windowStart;      // Start time of current 10-minute window
+                uint16_t messagesExchanged;     // Messages exchanged in current window
+                uint16_t successfulMessages;   // Successful messages in current window
+                uint16_t failedMessages;       // Failed messages in current window
+                unsigned long lastResponseTime; // Time of last successful response
+
+                RecentStats() : windowStart(0), messagesExchanged(0),
+                                successfulMessages(0), failedMessages(0), lastResponseTime(0) {}
+            } recentStats;
         };
 
 /**
@@ -277,6 +290,76 @@ namespace szogfm {
             bool testNodeCommunication(uint8_t nodeId);
 
             // ===========================================
+            // NODE NAMING AND MANAGEMENT METHODS
+            // ===========================================
+
+            /**
+             * Set a custom name/location for a node
+             * @param nodeId Node ID to rename
+             * @param name New name/location for the node (e.g., "Main Stage", "Food Court")
+             * @return true if the name was set successfully
+             */
+            bool setNodeName(uint8_t nodeId, const String& name);
+
+            /**
+             * Get the custom name/location for a node
+             * @param nodeId Node ID to get name for
+             * @return Custom name if set, or default name if not set
+             */
+            String getNodeName(uint8_t nodeId) const;
+
+            /**
+             * Reset node name to default
+             * @param nodeId Node ID to reset name for
+             * @return true if the name was reset successfully
+             */
+            bool resetNodeName(uint8_t nodeId);
+
+            /**
+             * Delete/remove a node from the system
+             * @param nodeId Node ID to remove
+             * @return true if the node was removed successfully
+             */
+            bool deleteNode(uint8_t nodeId);
+
+            /**
+             * Update recent statistics for a node (10-minute window)
+             * @param nodeId Node ID to update stats for
+             * @param success Whether the last operation was successful
+             */
+            void updateNodeRecentStats(uint8_t nodeId, bool success);
+
+            /**
+             * Get time since last response from a node in human-readable format
+             * @param nodeId Node ID to check
+             * @return String like "2m 30s ago" or "Never"
+             */
+            String getTimeSinceLastResponse(uint8_t nodeId) const;
+
+            /**
+             * Clean up old statistics (call periodically)
+             */
+            void cleanupOldStatistics();
+
+            /**
+             * Save node names to persistent storage
+             * @return true if names were saved successfully
+             */
+            bool saveNodeNames();
+
+            /**
+             * Load node names from persistent storage
+             * @return true if names were loaded successfully
+             */
+            bool loadNodeNames();
+
+            /**
+             * Get count of currently connected nodes
+             * @return Number of nodes that are currently connected
+             */
+            int getConnectedNodeCount() const;
+
+            // ===========================================
             // CONFIGURATION METHODS
             // ===========================================
 
@@ -314,7 +397,6 @@ namespace szogfm {
              */
             bool handleNodeMessage(const void* message, size_t length, uint8_t senderNodeId);
 
-
             /**
              * Handle a status response message from a node
              * @param statusMsg The status message received
@@ -332,12 +414,6 @@ namespace szogfm {
              * @return true if the message was handled successfully
              */
             bool handleNodeAckMessage(const AckMessage& ackMsg, uint8_t senderNodeId, unsigned long receiveTime);
-
-            /**
-             * Get count of currently connected nodes
-             * @return Number of nodes that are currently connected
-             */
-            int getConnectedNodeCount() const;
 
         private:
             // ===========================================
@@ -361,6 +437,9 @@ namespace szogfm {
 
             // Communication statistics
             CommunicationStats _commStats;                // Communication performance metrics
+
+            // Node name storage for custom location names
+            std::map<uint8_t, String> _nodeNames;         // Custom names for nodes (persistent)
 
             // Message retry system
             struct PendingMessage {
@@ -452,6 +531,8 @@ namespace szogfm {
             void handleSetFrequency();                    // Frequency control API
             void handleSetRelay();                        // Relay control API
             void handleSetMute();                         // Mute control API
+            void handleSetNodeName();                     // Node rename API
+            void handleDeleteNode();                      // Node delete API
             void handleDiscoverNodes();                   // Node discovery API
             void handleResetStats();                      // Statistics reset API
         };

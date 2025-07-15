@@ -32,10 +32,10 @@ namespace szogfm {
                   _pinM1(32),             // M1 pin for EBYTE module
                   _pinAUX(33),            // AUX pin for EBYTE module
 
-                // WiFi configuration (defaults to AP mode)
-                  _wifiSsid("SzogFM_Controller"),
-                  _wifiPassword("GombaSzog24"),
-                  _wifiApMode(true) {
+                // WiFi configuration (connects to existing network)
+                  _wifiSsid("Medio"),
+                  _wifiPassword("h3s8gQxUA-v7"),
+                  _wifiApMode(false) {    // Changed to station mode
 
             // CRITICAL: Do NOT initialize complex objects or system calls in constructor
             // This was the cause of the bootloop issue
@@ -43,9 +43,9 @@ namespace szogfm {
             _webServer = nullptr;
 
             // Initialize default configuration (simple assignments only)
-            _config.wifiSsid = "SzogFM_Controller";
-            _config.wifiPassword = "GombaSzog24";
-            _config.accessPointMode = true;
+            _config.wifiSsid = "Medio";
+            _config.wifiPassword = "h3s8gQxUA-v7";
+            _config.accessPointMode = false;  // Station mode to connect to existing network
             _config.radioChannel = 0x1A;
             _config.radioAddress = 0x1234;
             _config.transmissionPower = 0; // Maximum power
@@ -59,6 +59,9 @@ namespace szogfm {
             // Initialize communication statistics (simple memset)
             memset(&_commStats, 0, sizeof(_commStats));
             _commStats.minimumResponseTime = ULONG_MAX;
+
+            // Load node names from persistent storage
+            loadNodeNames();
 
             Serial.println("🎵 SzögFM Controller created (stable version)");
         }
@@ -144,12 +147,27 @@ namespace szogfm {
             Serial.printf("   • Free heap: %d bytes\n", ESP.getFreeHeap());
             Serial.printf("   • Communication: %s\n", _commModule ? "✅ Active" : "⚠️  Disabled");
 
-            if (_config.accessPointMode) {
-                Serial.printf("   • WiFi AP: %s\n", WiFi.softAPIP().toString().c_str());
-                Serial.printf("   • Web interface: http://%s\n", WiFi.softAPIP().toString().c_str());
-            } else if (WiFi.status() == WL_CONNECTED) {
-                Serial.printf("   • WiFi STA: %s\n", WiFi.localIP().toString().c_str());
-                Serial.printf("   • Web interface: http://%s\n", WiFi.localIP().toString().c_str());
+            // Print connection information
+            if (WiFi.status() == WL_CONNECTED) {
+                Serial.println("📡 WiFi Station Mode - Connected to Existing Network:");
+                Serial.printf("   🌐 Network: %s\n", WiFi.SSID().c_str());
+                Serial.printf("   📍 Static IP: %s\n", WiFi.localIP().toString().c_str());
+                Serial.printf("   🚪 Gateway: %s\n", WiFi.gatewayIP().toString().c_str());
+                Serial.printf("   📶 Signal: %d dBm\n", WiFi.RSSI());
+                Serial.printf("   🌍 Web Interface: http://%s\n", WiFi.localIP().toString().c_str());
+                Serial.printf("   🌍 Direct Access: http://172.17.10.24\n");
+                Serial.println("   📱 Accessible from any device on the network!");
+            } else if (WiFi.getMode() == WIFI_AP || WiFi.getMode() == WIFI_AP_STA) {
+                Serial.println("📡 WiFi Access Point Mode (Emergency/Fallback):");
+                Serial.printf("   📍 AP IP Address: %s\n", WiFi.softAPIP().toString().c_str());
+                Serial.printf("   🌍 Web Interface: http://%s\n", WiFi.softAPIP().toString().c_str());
+            } else {
+                Serial.println("📡 WiFi Status: No Network Connection");
+            }
+
+            // Set up mDNS for easy access
+            if (MDNS.begin("szogfm-controller")) {
+                Serial.println("🔗 mDNS responder started: http://szogfm-controller.local");
             }
 
             Serial.println("🟢 System is ready for festival operation!");
@@ -246,8 +264,10 @@ namespace szogfm {
                 static uint32_t minHeap = ESP.getFreeHeap();
                 if (ESP.getFreeHeap() < minHeap) {
                     minHeap = ESP.getFreeHeap();
-                    Serial.printf("⚠️  New minimum heap: %d bytes\n", minHeap);
                 }
+
+                // Clean up old statistics periodically
+                cleanupOldStatistics();
 
                 lastHeartbeat = currentTime;
             }
@@ -520,6 +540,196 @@ namespace szogfm {
             Serial.println("✅ Communication statistics reset");
         }
 
+        // Node naming methods
+        bool ControllerApplication::setNodeName(uint8_t nodeId, const String& name) {
+            if (nodeId < 1 || nodeId > 20) {
+                Serial.printf("❌ Invalid node ID for renaming: %d\n", nodeId);
+                return false;
+            }
+
+            // Trim and validate the name
+            String trimmedName = name;
+            trimmedName.trim();
+
+            if (trimmedName.length() == 0) {
+                Serial.printf("❌ Empty name provided for node %d\n", nodeId);
+                return false;
+            }
+
+            if (trimmedName.length() > 32) {
+                trimmedName = trimmedName.substring(0, 32);
+                Serial.printf("⚠️  Name truncated to 32 characters for node %d\n", nodeId);
+            }
+
+            _nodeNames[nodeId] = trimmedName;
+
+            // Update the node status if it exists
+            if (_nodeStatus.find(nodeId) != _nodeStatus.end()) {
+                _nodeStatus[nodeId].nodeName = trimmedName;
+            }
+
+            // Save to persistent storage
+            saveNodeNames();
+
+            Serial.printf("✅ Node %d renamed to: %s\n", nodeId, trimmedName.c_str());
+
+            // Example location names for festival use:
+            // "Main Stage Left", "Main Stage Right", "Food Court", "Beer Garden",
+            // "VIP Area", "Camping Ground A", "Entrance Gate", "Backstage"
+
+            return true;
+        }
+
+        String ControllerApplication::getNodeName(uint8_t nodeId) const {
+            auto it = _nodeNames.find(nodeId);
+            if (it != _nodeNames.end() && it->second.length() > 0) {
+                return it->second;
+            }
+            return "Node " + String(nodeId); // Default name
+        }
+
+        bool ControllerApplication::resetNodeName(uint8_t nodeId) {
+            _nodeNames.erase(nodeId);
+
+            // Update the node status if it exists
+            if (_nodeStatus.find(nodeId) != _nodeStatus.end()) {
+                _nodeStatus[nodeId].nodeName = "Node " + String(nodeId);
+            }
+
+            saveNodeNames();
+            Serial.printf("✅ Node %d name reset to default\n", nodeId);
+            return true;
+        }
+
+        bool ControllerApplication::deleteNode(uint8_t nodeId) {
+            if (nodeId < 1 || nodeId > 20) {
+                Serial.printf("❌ Invalid node ID for deletion: %d\n", nodeId);
+                return false;
+            }
+
+            // Remove from node status map
+            auto statusIt = _nodeStatus.find(nodeId);
+            if (statusIt != _nodeStatus.end()) {
+                String nodeName = getNodeName(nodeId);
+                _nodeStatus.erase(statusIt);
+                Serial.printf("🗑️  Removed node %d (%s) from status list\n", nodeId, nodeName.c_str());
+            }
+
+            // Remove from node names map
+            auto nameIt = _nodeNames.find(nodeId);
+            if (nameIt != _nodeNames.end()) {
+                _nodeNames.erase(nameIt);
+                Serial.printf("🗑️  Removed node %d name from memory\n", nodeId);
+            }
+
+            // Remove any pending messages for this node
+            auto msgIt = _pendingMessages.begin();
+            while (msgIt != _pendingMessages.end()) {
+                if (msgIt->nodeId == nodeId) {
+                    Serial.printf("🗑️  Removed pending message for node %d\n", nodeId);
+                    msgIt = _pendingMessages.erase(msgIt);
+                } else {
+                    ++msgIt;
+                }
+            }
+
+            Serial.printf("✅ Node %d completely removed from system\n", nodeId);
+            return true;
+        }
+
+        void ControllerApplication::updateNodeRecentStats(uint8_t nodeId, bool success) {
+            auto it = _nodeStatus.find(nodeId);
+            if (it == _nodeStatus.end()) {
+                return; // Node doesn't exist
+            }
+
+            NodeStatus& status = it->second;
+            unsigned long currentTime = millis();
+
+            // Check if we need to start a new 10-minute window
+            if (status.recentStats.windowStart == 0 ||
+                currentTime - status.recentStats.windowStart > 600000) { // 10 minutes = 600,000 ms
+
+                // Start new window
+                status.recentStats.windowStart = currentTime;
+                status.recentStats.messagesExchanged = 0;
+                status.recentStats.successfulMessages = 0;
+                status.recentStats.failedMessages = 0;
+            }
+
+            // Update stats
+            status.recentStats.messagesExchanged++;
+            if (success) {
+                status.recentStats.successfulMessages++;
+                status.recentStats.lastResponseTime = currentTime;
+            } else {
+                status.recentStats.failedMessages++;
+            }
+        }
+
+        String ControllerApplication::getTimeSinceLastResponse(uint8_t nodeId) const {
+            auto it = _nodeStatus.find(nodeId);
+            if (it == _nodeStatus.end() || it->second.recentStats.lastResponseTime == 0) {
+                return "Never";
+            }
+
+            unsigned long timeDiff = millis() - it->second.recentStats.lastResponseTime;
+
+            if (timeDiff < 1000) {
+                return "Just now";
+            } else if (timeDiff < 60000) { // Less than 1 minute
+                return String(timeDiff / 1000) + "s ago";
+            } else if (timeDiff < 3600000) { // Less than 1 hour
+                unsigned long minutes = timeDiff / 60000;
+                unsigned long seconds = (timeDiff % 60000) / 1000;
+                if (seconds > 0) {
+                    return String(minutes) + "m " + String(seconds) + "s ago";
+                } else {
+                    return String(minutes) + "m ago";
+                }
+            } else { // More than 1 hour
+                unsigned long hours = timeDiff / 3600000;
+                unsigned long minutes = (timeDiff % 3600000) / 60000;
+                if (minutes > 0) {
+                    return String(hours) + "h " + String(minutes) + "m ago";
+                } else {
+                    return String(hours) + "h ago";
+                }
+            }
+        }
+
+        void ControllerApplication::cleanupOldStatistics() {
+            unsigned long currentTime = millis();
+
+            for (auto& pair : _nodeStatus) {
+                NodeStatus& status = pair.second;
+
+                // Reset statistics window if older than 10 minutes
+                if (status.recentStats.windowStart != 0 &&
+                    currentTime - status.recentStats.windowStart > 600000) {
+
+                    status.recentStats.windowStart = currentTime;
+                    status.recentStats.messagesExchanged = 0;
+                    status.recentStats.successfulMessages = 0;
+                    status.recentStats.failedMessages = 0;
+                }
+            }
+        }
+
+        bool ControllerApplication::saveNodeNames() {
+            // For now, we'll keep names in memory only
+            // In a full implementation, you could save to SPIFFS, EEPROM, or preferences
+            Serial.println("💾 Node names saved to memory");
+            return true;
+        }
+
+        bool ControllerApplication::loadNodeNames() {
+            // For now, we'll start with empty names
+            // In a full implementation, you could load from SPIFFS, EEPROM, or preferences
+            Serial.println("📂 Node names loaded from memory");
+            return true;
+        }
+
         const CommunicationStats& ControllerApplication::getCommunicationStats() const {
             return _commStats;
         }
@@ -580,6 +790,16 @@ namespace szogfm {
             return _config;
         }
 
+        int ControllerApplication::getConnectedNodeCount() const {
+            int connectedCount = 0;
+            for (const auto& pair : _nodeStatus) {
+                if (pair.second.isConnected) {
+                    connectedCount++;
+                }
+            }
+            return connectedCount;
+        }
+
         // Private helper methods
         bool ControllerApplication::initializeWebServer() {
             Serial.println("🌐 Setting up WiFi and Web Server...");
@@ -595,22 +815,69 @@ namespace szogfm {
                     delay(2000);
                     Serial.printf("✅ AP IP address: %s\n", WiFi.softAPIP().toString().c_str());
                 } else {
+                    // Configure static IP for station mode
+                    Serial.println("📡 Configuring static IP settings...");
+                    IPAddress local_IP(172, 17, 10, 24);        // Static IP: 172.17.10.24
+                    IPAddress gateway(172, 17, 10, 254);        // Gateway: 172.17.10.254
+                    IPAddress subnet(255, 255, 255, 0);         // Subnet mask: 255.255.255.0
+                    IPAddress primaryDNS(8, 8, 8, 8);           // Primary DNS (Google)
+                    IPAddress secondaryDNS(8, 8, 4, 4);         // Secondary DNS (Google)
+
+                    // Configure WiFi with static IP
+                    if (!WiFi.config(local_IP, gateway, subnet, primaryDNS, secondaryDNS)) {
+                        Serial.println("❌ Failed to configure static IP");
+                        // Continue anyway, DHCP might work
+                    } else {
+                        Serial.printf("✅ Static IP configured: %s\n", local_IP.toString().c_str());
+                        Serial.printf("   Gateway: %s\n", gateway.toString().c_str());
+                        Serial.printf("   Subnet: %s\n", subnet.toString().c_str());
+                    }
+
                     Serial.printf("📡 Connecting to WiFi network: %s\n", _config.wifiSsid.c_str());
+                    Serial.println("   Please wait while connecting to existing network...");
+
                     WiFi.begin(_config.wifiSsid.c_str(), _config.wifiPassword.c_str());
 
                     unsigned long startTime = millis();
-                    while (WiFi.status() != WL_CONNECTED && millis() - startTime < 20000) {
+                    while (WiFi.status() != WL_CONNECTED && millis() - startTime < 30000) {
                         delay(500);
                         Serial.print(".");
+
+                        // Print connection status every 5 seconds
+                        if ((millis() - startTime) % 5000 == 0) {
+                            Serial.printf("\n   Connection attempt %lu ms, status: %d\n",
+                                          millis() - startTime, WiFi.status());
+                        }
                     }
 
                     if (WiFi.status() != WL_CONNECTED) {
-                        Serial.println("\n❌ Failed to connect to WiFi - falling back to AP mode");
-                        WiFi.softAP("SzogFM_Fallback", "fallback123");
-                        delay(2000);
-                        Serial.printf("🆘 Fallback AP IP: %s\n", WiFi.softAPIP().toString().c_str());
+                        Serial.println("\n❌ Failed to connect to WiFi network!");
+                        Serial.printf("   Final status: %d\n", WiFi.status());
+                        Serial.println("   🔄 Falling back to emergency AP mode...");
+
+                        // Fallback to AP mode for emergency access
+                        WiFi.disconnect();
+                        delay(1000);
+
+                        bool fallbackResult = WiFi.softAP("SzogFM_Emergency", "emergency123");
+                        if (fallbackResult) {
+                            delay(2000);
+                            Serial.printf("🆘 Emergency fallback AP started: %s\n", WiFi.softAPIP().toString().c_str());
+                            Serial.println("   Connect to 'SzogFM_Emergency' (password: emergency123)");
+                        } else {
+                            Serial.println("💀 Complete WiFi failure - no network access");
+                        }
                     } else {
-                        Serial.printf("\n✅ Connected - IP: %s\n", WiFi.localIP().toString().c_str());
+                        Serial.printf("\n✅ Connected to WiFi network successfully!\n");
+                        Serial.printf("   SSID: %s\n", WiFi.SSID().c_str());
+                        Serial.printf("   IP Address: %s\n", WiFi.localIP().toString().c_str());
+                        Serial.printf("   Gateway: %s\n", WiFi.gatewayIP().toString().c_str());
+                        Serial.printf("   Subnet Mask: %s\n", WiFi.subnetMask().toString().c_str());
+                        Serial.printf("   DNS 1: %s\n", WiFi.dnsIP(0).toString().c_str());
+                        Serial.printf("   DNS 2: %s\n", WiFi.dnsIP(1).toString().c_str());
+                        Serial.printf("   Signal Strength: %d dBm\n", WiFi.RSSI());
+                        Serial.printf("   MAC Address: %s\n", WiFi.macAddress().c_str());
+                        Serial.println("   🌍 Controller accessible from anywhere on the network!");
                     }
                 }
 
@@ -619,6 +886,18 @@ namespace szogfm {
                 setupWebRoutes();
                 _webServer->begin();
                 Serial.println("🌍 HTTP server started on port 80");
+
+                // Print final access information
+                if (WiFi.status() == WL_CONNECTED) {
+                    Serial.printf("🌐 Web Interface Access:\n");
+                    Serial.printf("   Local Network: http://%s\n", WiFi.localIP().toString().c_str());
+                    Serial.printf("   Direct IP: http://172.17.10.24\n");
+                    Serial.println("   📱 Access from any device on the network!");
+                } else if (WiFi.getMode() == WIFI_AP || WiFi.getMode() == WIFI_AP_STA) {
+                    Serial.printf("🆘 Emergency Access Only:\n");
+                    Serial.printf("   Emergency AP: http://%s\n", WiFi.softAPIP().toString().c_str());
+                }
+
                 return true;
 
             } catch (...) {
@@ -657,6 +936,16 @@ namespace szogfm {
 
             _webServer->on("/set_mute", HTTP_POST, [this]() {
                 handleSetMute();
+            });
+
+            // Node naming endpoint
+            _webServer->on("/set_node_name", HTTP_POST, [this]() {
+                handleSetNodeName();
+            });
+
+            // Node deletion endpoint
+            _webServer->on("/delete_node", HTTP_POST, [this]() {
+                handleDeleteNode();
             });
 
             // Utility endpoints
@@ -784,18 +1073,48 @@ namespace szogfm {
                 html += "</div>";
             }
 
-            // Individual Node Controls (NEW FEATURE)
+            // Individual Node Controls (ENHANCED WITH STATISTICS AND DELETE)
             if (!_nodeStatus.empty() && _commModule) {
                 html += "<h2>📡 Individual Node Controls</h2>";
-                html += "<div style='display: grid; grid-template-columns: repeat(auto-fill, minmax(350px, 1fr)); gap: 15px;'>";
+                html += "<div style='display: grid; grid-template-columns: repeat(auto-fill, minmax(450px, 1fr)); gap: 15px;'>";
 
                 for (const auto& pair : _nodeStatus) {
                     const NodeStatus& status = pair.second;
                     String nodeStatusClass = status.isConnected ? "good" : "error";
+                    String displayName = getNodeName(status.nodeId);
 
                     html += "<div class='status " + nodeStatusClass + "'>";
-                    html += "<h3>🎪 Node " + String(status.nodeId) + " Controls</h3>";
+
+                    // Node header with name, rename, and delete functionality
+                    html += "<div style='display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px;'>";
+                    html += "<h3 id='node_title_" + String(status.nodeId) + "'>🎪 " + displayName + "</h3>";
+                    html += "<div>";
+                    html += "<button class='button button-small' onclick=\"toggleRename(" + String(status.nodeId) + ")\">✏️ Rename</button>";
+                    html += "<button class='button button-small' style='background: #dc3545; margin-left: 5px;' onclick=\"deleteNode(" + String(status.nodeId) + ")\">🗑️ Delete</button>";
+                    html += "</div>";
+                    html += "</div>";
+
+                    // Rename input (initially hidden)
+                    html += "<div id='rename_section_" + String(status.nodeId) + "' style='display: none; margin-bottom: 10px; padding: 8px; background: #e9ecef; border-radius: 4px;'>";
+                    html += "<input type='text' id='rename_input_" + String(status.nodeId) + "' placeholder='Enter location name' value='" + displayName + "' style='width: 60%; padding: 4px; margin-right: 5px;'>";
+                    html += "<button class='button button-small' onclick=\"saveNodeName(" + String(status.nodeId) + ")\">💾 Save</button>";
+                    html += "<button class='button button-small' onclick=\"cancelRename(" + String(status.nodeId) + ")\">❌ Cancel</button>";
+                    html += "</div>";
+
                     html += "<p><strong>Status:</strong> " + String(status.isConnected ? "✅ Online" : "❌ Offline") + "</p>";
+
+                    // NEW: Recent Activity Statistics
+                    html += "<div style='background: #f8f9fa; padding: 8px; border-radius: 4px; margin: 8px 0; font-size: 12px;'>";
+                    html += "<strong>📊 Last 10 min:</strong> ";
+                    html += String(status.recentStats.successfulMessages) + "/" + String(status.recentStats.messagesExchanged) + " msgs";
+
+                    if (status.recentStats.messagesExchanged > 0) {
+                        float recentSuccessRate = (status.recentStats.successfulMessages * 100.0f) / status.recentStats.messagesExchanged;
+                        html += " (" + String(recentSuccessRate, 1) + "% success)";
+                    }
+
+                    html += "<br><strong>🕒 Last response:</strong> " + getTimeSinceLastResponse(status.nodeId);
+                    html += "</div>";
 
                     if (status.isConnected) {
                         html += "<p><strong>📻 Current:</strong> " + String(status.frequency / 100.0, 1) + " MHz, Vol " + String(status.volume) + "/15" + String(status.muted ? " (Muted)" : "") + ", Power " + String(status.relayState ? "ON" : "OFF") + "</p>";
@@ -833,6 +1152,9 @@ namespace szogfm {
                         if (status.hasSensors) {
                             html += "<p><strong>🌡️ Environment:</strong> " + String(status.temperature, 1) + "°C, " + String(status.humidity, 1) + "%</p>";
                         }
+                    } else {
+                        // Show some info even for offline nodes
+                        html += "<p style='color: #666;'><em>Node offline - last seen: " + getTimeSinceLastResponse(status.nodeId) + "</em></p>";
                     }
                     html += "</div>";
                 }
@@ -922,6 +1244,67 @@ namespace szogfm {
                 html += "    .then(() => { alert('Node discovery started'); setTimeout(() => location.reload(), 3000); });";
                 html += "}";
 
+                // Node rename functions (NEW FUNCTIONALITY)
+                html += "function toggleRename(nodeId) {";
+                html += "  const renameSection = document.getElementById('rename_section_' + nodeId);";
+                html += "  const isVisible = renameSection.style.display !== 'none';";
+                html += "  renameSection.style.display = isVisible ? 'none' : 'block';";
+                html += "  if (!isVisible) {";
+                html += "    document.getElementById('rename_input_' + nodeId).focus();";
+                html += "  }";
+                html += "}";
+
+                html += "function saveNodeName(nodeId) {";
+                html += "  const nameInput = document.getElementById('rename_input_' + nodeId);";
+                html += "  const newName = nameInput.value.trim();";
+                html += "  if (newName === '') {";
+                html += "    alert('Please enter a name for the node location');";
+                html += "    return;";
+                html += "  }";
+                html += "  if (newName.length > 32) {";
+                html += "    alert('Name too long! Maximum 32 characters.');";
+                html += "    return;";
+                html += "  }";
+                html += "  fetch('/set_node_name?node_id=' + nodeId + '&name=' + encodeURIComponent(newName), {method: 'POST'})";
+                html += "    .then(response => response.text())";
+                html += "    .then(result => {";
+                html += "      if (result.includes('success')) {";
+                html += "        document.getElementById('node_title_' + nodeId).innerHTML = '🎪 ' + newName;";
+                html += "        document.getElementById('rename_section_' + nodeId).style.display = 'none';";
+                html += "        alert('Node ' + nodeId + ' renamed to: ' + newName);";
+                html += "      } else {";
+                html += "        alert('Failed to rename node: ' + result);";
+                html += "      }";
+                html += "    })";
+                html += "    .catch(error => alert('Error renaming node: ' + error));";
+                html += "}";
+
+                html += "function cancelRename(nodeId) {";
+                html += "  document.getElementById('rename_section_' + nodeId).style.display = 'none';";
+                html += "  // Reset input to original value";
+                html += "  const currentTitle = document.getElementById('node_title_' + nodeId).innerHTML;";
+                html += "  const originalName = currentTitle.replace('🎪 ', '');";
+                html += "  document.getElementById('rename_input_' + nodeId).value = originalName;";
+                html += "}";
+
+                // Node deletion function (NEW FUNCTIONALITY)
+                html += "function deleteNode(nodeId) {";
+                html += "  const nodeName = document.getElementById('node_title_' + nodeId).innerHTML.replace('🎪 ', '');";
+                html += "  if (confirm('Are you sure you want to delete node ' + nodeId + ' (' + nodeName + ')?\\n\\nThis will remove it from the interface and cannot be undone.\\nThe physical node will continue working but won\\'t be controlled from here.')) {";
+                html += "    fetch('/delete_node?node_id=' + nodeId, {method: 'POST'})";
+                html += "      .then(response => response.text())";
+                html += "      .then(result => {";
+                html += "        if (result.includes('success')) {";
+                html += "          alert('Node ' + nodeId + ' deleted successfully');";
+                html += "          location.reload(); // Refresh to update the interface";
+                html += "        } else {";
+                html += "          alert('Failed to delete node: ' + result);";
+                html += "        }";
+                html += "      })";
+                html += "      .catch(error => alert('Error deleting node: ' + error));";
+                html += "  }";
+                html += "}";
+
                 html += "</script>";
             }
 
@@ -940,12 +1323,20 @@ namespace szogfm {
                 const NodeStatus& status = pair.second;
                 JsonObject nodeObj = nodesArray.createNestedObject();
                 nodeObj["id"] = status.nodeId;
+                nodeObj["name"] = getNodeName(status.nodeId);
                 nodeObj["connected"] = status.isConnected;
                 nodeObj["frequency"] = status.frequency;
                 nodeObj["volume"] = status.volume;
                 nodeObj["muted"] = status.muted;
                 nodeObj["relay"] = status.relayState;
                 nodeObj["last_seen"] = millis() - status.lastSeenTime;
+
+                // Add recent statistics
+                JsonObject recentStats = nodeObj.createNestedObject("recent_stats");
+                recentStats["messages_exchanged"] = status.recentStats.messagesExchanged;
+                recentStats["successful_messages"] = status.recentStats.successfulMessages;
+                recentStats["failed_messages"] = status.recentStats.failedMessages;
+                recentStats["time_since_last_response"] = getTimeSinceLastResponse(status.nodeId);
 
                 if (status.hasSensors) {
                     nodeObj["temperature"] = status.temperature;
@@ -1021,6 +1412,79 @@ namespace szogfm {
             bool mute = _webServer->arg("mute").toInt() != 0;
             bool success = setNodeMute(nodeId, mute);
             _webServer->send(success ? 200 : 500, "text/plain", success ? "Mute command sent" : "Failed to send command");
+        }
+
+        void ControllerApplication::handleSetNodeName() {
+            if (!_webServer->hasArg("node_id") || !_webServer->hasArg("name")) {
+                _webServer->send(400, "text/plain", "Missing parameters: node_id and name required");
+                return;
+            }
+
+            uint8_t nodeId = _webServer->arg("node_id").toInt();
+            String nodeName = _webServer->arg("name");
+
+            // Validate node ID
+            if (nodeId < 1 || nodeId > 20) {
+                _webServer->send(400, "text/plain", "Invalid node ID: must be 1-20");
+                return;
+            }
+
+            // Validate name
+            nodeName.trim();
+            if (nodeName.length() == 0) {
+                _webServer->send(400, "text/plain", "Name cannot be empty");
+                return;
+            }
+
+            if (nodeName.length() > 32) {
+                _webServer->send(400, "text/plain", "Name too long: maximum 32 characters");
+                return;
+            }
+
+            // Set the node name
+            bool success = setNodeName(nodeId, nodeName);
+
+            if (success) {
+                String response = "Node " + String(nodeId) + " successfully renamed to: " + nodeName;
+                _webServer->send(200, "text/plain", response + " (success)");
+                Serial.printf("🏷️  Web rename: Node %d -> %s\n", nodeId, nodeName.c_str());
+            } else {
+                _webServer->send(500, "text/plain", "Failed to rename node");
+            }
+        }
+
+        void ControllerApplication::handleDeleteNode() {
+            if (!_webServer->hasArg("node_id")) {
+                _webServer->send(400, "text/plain", "Missing parameter: node_id required");
+                return;
+            }
+
+            uint8_t nodeId = _webServer->arg("node_id").toInt();
+
+            // Validate node ID
+            if (nodeId < 1 || nodeId > 20) {
+                _webServer->send(400, "text/plain", "Invalid node ID: must be 1-20");
+                return;
+            }
+
+            // Check if node exists
+            if (_nodeStatus.find(nodeId) == _nodeStatus.end()) {
+                _webServer->send(404, "text/plain", "Node not found in system");
+                return;
+            }
+
+            String nodeName = getNodeName(nodeId);
+
+            // Delete the node
+            bool success = deleteNode(nodeId);
+
+            if (success) {
+                String response = "Node " + String(nodeId) + " (" + nodeName + ") successfully deleted";
+                _webServer->send(200, "text/plain", response + " (success)");
+                Serial.printf("🗑️  Web delete: Node %d (%s) removed from system\n", nodeId, nodeName.c_str());
+            } else {
+                _webServer->send(500, "text/plain", "Failed to delete node");
+            }
         }
 
         void ControllerApplication::handleDiscoverNodes() {
@@ -1114,16 +1578,6 @@ namespace szogfm {
             }
 
             return handled;
-        }
-
-        int ControllerApplication::getConnectedNodeCount() const {
-            int connectedCount = 0;
-            for (const auto& pair : _nodeStatus) {
-                if (pair.second.isConnected) {
-                    connectedCount++;
-                }
-            }
-            return connectedCount;
         }
 
         void ControllerApplication::processPendingMessages() {
@@ -1221,6 +1675,11 @@ namespace szogfm {
             if (success) {
                 _commStats.totalMessagesSent++;
 
+                // Update recent statistics for the target node (if not broadcast)
+                if (nodeId != 0) {
+                    updateNodeRecentStats(nodeId, false); // We'll mark it successful when we get the ACK
+                }
+
                 // Add to pending messages for retry handling (except broadcasts)
                 if (nodeId != 0) {
                     PendingMessage pending;
@@ -1259,9 +1718,13 @@ namespace szogfm {
                           senderNodeId, statusMsg.frequency / 100.0, statusMsg.volume,
                           statusMsg.relayState ? "ON" : "OFF", statusMsg.rssi, static_cast<int>(statusMsg.status));
 
+            // Update recent statistics for successful message
+            updateNodeRecentStats(senderNodeId, true);
+
             // Update or create node status
             NodeStatus& nodeStatus = _nodeStatus[senderNodeId];
             nodeStatus.nodeId = senderNodeId;
+            nodeStatus.nodeName = getNodeName(senderNodeId); // Set the display name
             nodeStatus.isConnected = true;
             nodeStatus.lastSeenTime = receiveTime;
             nodeStatus.volume = statusMsg.volume;
@@ -1325,6 +1788,9 @@ namespace szogfm {
         bool ControllerApplication::handleNodeAckMessage(const AckMessage& ackMsg, uint8_t senderNodeId, unsigned long receiveTime) {
             Serial.printf("📨 ACK from node %d: seq=%d, success=%s\n",
                           senderNodeId, ackMsg.acknowledgedSeq, ackMsg.success ? "YES" : "NO");
+
+            // Update recent statistics
+            updateNodeRecentStats(senderNodeId, ackMsg.success);
 
             // Find and remove the corresponding pending message
             auto it = std::find_if(_pendingMessages.begin(), _pendingMessages.end(),
