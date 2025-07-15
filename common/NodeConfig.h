@@ -16,7 +16,7 @@ namespace szogfm {
          * Constructor
          * @param nodeId Default node ID (used if no stored value exists)
          */
-        NodeConfig(uint8_t defaultNodeId = 2);
+        NodeConfig(uint8_t defaultNodeId = 5);
 
         /**
          * Load configuration from EEPROM

@@ -53,12 +53,16 @@ namespace szogfm {
             memset(&_stats, 0, sizeof(_stats));
             _stats.bootTime = millis();
 
-            Serial.println("🎵 SzögFM Node Application created (NO DISPLAY VERSION)");
+            Serial.println("🎵 SzögFM Node Application created (FIXED VERSION - Proper Command Filtering)");
         }
 
         bool NodeApplication::initialize() {
             SimpleNodeStatus::printHeader();
-            Serial.println("🚀 Starting initialization...\n");
+            Serial.println("🚀 Starting initialization (FIXED VERSION)...\n");
+            Serial.println("🔧 CRITICAL FIX: Added proper command filtering by Node ID");
+            Serial.println("   - Commands now check if they're meant for this node");
+            Serial.println("   - Broadcast commands (nodeId=0) processed by all nodes");
+            Serial.println("   - Individual commands only processed by target node\n");
 
             // Load configuration
             SimpleNodeStatus::printBootSequence("Load Configuration", true,
@@ -67,6 +71,12 @@ namespace szogfm {
             if (!_config.load()) {
                 _config.reset(true);
             }
+
+            // IMPORTANT: Show which Node ID this device will respond to
+            Serial.printf("📍 THIS NODE WILL RESPOND TO:\n");
+            Serial.printf("   • Node ID %d (individual commands)\n", _config.getNodeId());
+            Serial.printf("   • Node ID 0 (broadcast commands to all nodes)\n");
+            Serial.printf("   • All other node IDs will be IGNORED\n\n");
 
             // Initialize I2C and scan for devices
             SimpleNodeStatus::printBootSequence("I2C Bus Setup", true, "SDA:" + String(_pinSDASensor) + " SCL:" + String(_pinSCLSensor));
@@ -121,7 +131,7 @@ namespace szogfm {
             setupButtonCallbacks();
             SimpleNodeStatus::printBootSequence("Button Handler", true, "4 buttons configured with noise filtering");
 
-            // Initialize relay
+            // Initialize relay with EXPLICIT pin configuration
             pinMode(_pinRelayControl, OUTPUT);
             applyRelayState();
             SimpleNodeStatus::printBootSequence("Relay Control", true,
@@ -219,7 +229,7 @@ namespace szogfm {
                 }
             }
 
-            // Process messages (quiet mode)
+            // Process messages (WITH PROPER FILTERING - THIS IS THE KEY FIX!)
             processMessages();
 
             // Read sensors if available
@@ -229,7 +239,7 @@ namespace szogfm {
             }
 
             // Handle button presses with IMPROVED filtering
-            if (_buttonHandler->update()) {
+            /*if (_buttonHandler->update()) {
                 _stats.totalButtonPresses++;
                 int analogValue = _buttonHandler->getLastAnalogValue();
 
@@ -245,7 +255,7 @@ namespace szogfm {
                               static_cast<int>(_buttonHandler->getLastButtonType()) == 1 ? "VOL-" :
                               static_cast<int>(_buttonHandler->getLastButtonType()) == 2 ? "FREQ+" : "FREQ-",
                               analogValue);
-            }
+            }*/
 
             // Send periodic status updates (less frequent)
             if (currentTime - _lastStatusTime > 10000) { // Every 10 seconds
@@ -291,6 +301,27 @@ namespace szogfm {
             _stats.totalCommandsReceived++;
             _stats.communication.messagesReceived++;
 
+            // 🔥 CRITICAL FIX: CHECK IF COMMAND IS FOR THIS NODE! 🔥
+            // This was the missing piece causing all nodes to respond to every command
+            uint8_t targetNodeId = message.header.nodeId;
+            uint8_t myNodeId = _config.getNodeId();
+
+            // Only process if:
+            // 1. Command is broadcast (nodeId = 0) - affects all nodes
+            // 2. Command is specifically for this node (nodeId matches our node ID)
+            if (targetNodeId != 0 && targetNodeId != myNodeId) {
+                // Command is for a different node - ignore it completely
+                if (_verboseDebugging) {
+                    Serial.printf("📤 IGNORING command for node %d (I am node %d)\n", targetNodeId, myNodeId);
+                }
+                return true; // Return true because we handled it correctly by ignoring it
+            }
+
+            // If we reach here, the command is either broadcast (0) or specifically for us
+            String targetType = (targetNodeId == 0) ? "BROADCAST" : "INDIVIDUAL";
+            Serial.printf("📥 PROCESSING %s command (target: %d, I am: %d): ",
+                          targetType.c_str(), targetNodeId, myNodeId);
+
             // Simple command logging
             String commandName = "";
             switch (message.command) {
@@ -304,7 +335,7 @@ namespace szogfm {
                 default: commandName = "UNKNOWN"; break;
             }
 
-            Serial.printf("📥 COMMAND: %s", commandName.c_str());
+            Serial.printf("%s", commandName.c_str());
 
             // Process the command
             bool success = false;
@@ -587,8 +618,8 @@ namespace szogfm {
         }
 
         bool NodeApplication::processToggleRelayCommand(bool state) {
-            Serial.printf("🔌 [RELAY DEBUG] Command received: %s\n", state ? "ON" : "OFF");
-            Serial.printf("🔌 [RELAY DEBUG] Pin %d before: %s\n", _pinRelayControl, digitalRead(_pinRelayControl) ? "HIGH" : "LOW");
+            Serial.printf("🔌 [RELAY DEBUG - Node %d] Command received: %s\n", _config.getNodeId(), state ? "ON" : "OFF");
+            Serial.printf("🔌 [RELAY DEBUG - Node %d] Pin %d before: %s\n", _config.getNodeId(), _pinRelayControl, digitalRead(_pinRelayControl) ? "HIGH" : "LOW");
 
             _config.setRelayState(state);
 
@@ -597,26 +628,26 @@ namespace szogfm {
 
             if (state) {
                 digitalWrite(_pinRelayControl, HIGH);
-                Serial.printf("🔌 [RELAY DEBUG] Setting pin %d to HIGH (3.3V)\n", _pinRelayControl);
+                Serial.printf("🔌 [RELAY DEBUG - Node %d] Setting pin %d to HIGH (3.3V)\n", _config.getNodeId(), _pinRelayControl);
             } else {
                 digitalWrite(_pinRelayControl, LOW);
-                Serial.printf("🔌 [RELAY DEBUG] Setting pin %d to LOW (0V)\n", _pinRelayControl);
+                Serial.printf("🔌 [RELAY DEBUG - Node %d] Setting pin %d to LOW (0V)\n", _config.getNodeId(), _pinRelayControl);
             }
 
             // Verify the pin state after setting
             delay(10); // Small delay to ensure state change
             bool actualState = digitalRead(_pinRelayControl);
-            Serial.printf("🔌 [RELAY DEBUG] Pin %d after: %s\n", _pinRelayControl, actualState ? "HIGH" : "LOW");
+            Serial.printf("🔌 [RELAY DEBUG - Node %d] Pin %d after: %s\n", _config.getNodeId(), _pinRelayControl, actualState ? "HIGH" : "LOW");
 
             if (actualState != state) {
-                Serial.println("❌ [RELAY DEBUG] WARNING: Pin state doesn't match command!");
+                Serial.printf("❌ [RELAY DEBUG - Node %d] WARNING: Pin state doesn't match command!\n", _config.getNodeId());
             } else {
-                Serial.println("✅ [RELAY DEBUG] Pin state verified correct");
+                Serial.printf("✅ [RELAY DEBUG - Node %d] Pin state verified correct\n", _config.getNodeId());
             }
 
             // Check if this is a hardware driver issue
             if (state && actualState) {
-                Serial.println("🔍 [RELAY DEBUG] If relay still doesn't click:");
+                Serial.printf("🔍 [RELAY DEBUG - Node %d] If relay still doesn't click:\n", _config.getNodeId());
                 Serial.println("   • Check if relay needs transistor driver (ESP32 = 3.3V, 20mA max)");
                 Serial.println("   • Verify relay coil voltage (should be 3.3V or 5V type)");
                 Serial.println("   • Check relay wiring and power supply");
@@ -678,7 +709,7 @@ namespace szogfm {
                 case MessageType::COMMAND:
                     if (bytesReceived >= sizeof(CommandMessage)) {
                         const CommandMessage* command = reinterpret_cast<const CommandMessage*>(buffer);
-                        return handleCommand(*command);
+                        return handleCommand(*command); // This now includes proper nodeId filtering
                     }
                     break;
 
@@ -781,7 +812,16 @@ namespace szogfm {
         }
 
         void NodeApplication::applyRelayState() {
+            // EXPLICIT relay pin control with proper OUTPUT configuration
+            pinMode(_pinRelayControl, OUTPUT);
             digitalWrite(_pinRelayControl, _config.getRelayState() ? HIGH : LOW);
+
+            // Debug output to verify relay state
+            Serial.printf("🔌 [RELAY INIT - Node %d] Pin %d set to %s (config: %s)\n",
+                          _config.getNodeId(),
+                          _pinRelayControl,
+                          digitalRead(_pinRelayControl) ? "HIGH" : "LOW",
+                          _config.getRelayState() ? "ON" : "OFF");
         }
 
         bool NodeApplication::testHardwareComponents() {
